@@ -1,0 +1,188 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0
+// https://mozilla.org/MPL/2.0/
+//
+// BTC Trend Bot (Zynthor)
+// ------------------------------------------------------------------------------
+// Estrategia de seguimiento de tendencia para BTC (spot, solo largos por defecto).
+//   1. Filtro de régimen: solo compra si el precio está sobre la EMA 200 diaria
+//      (sin repintado: usa la vela diaria YA cerrada).
+//   2. Señal de entrada a elegir: Supertrend, cruce de EMAs o ruptura Donchian.
+//   3. Filtro opcional de fuerza de tendencia con ADX.
+//   4. Stop inicial por ATR + trailing stop por ATR (deja correr las ganancias).
+//   5. Tamaño de posición por riesgo (% del capital arriesgado por operación),
+//      limitado al 100 % del capital (spot, sin apalancamiento).
+//   6. Cada orden lleva un "alert_message" para enviar por webhook a tu exchange.
+//
+// Cómo usarlo: ver tradingview/README.md
+// AVISO: no es asesoría financiera. Prueba primero en papel / cuenta demo.
+// ------------------------------------------------------------------------------
+//@version=6
+strategy("BTC Trend Bot (Zynthor)", shorttitle = "BTC Trend Bot", overlay = true,
+     initial_capital       = 1000,
+     default_qty_type      = strategy.percent_of_equity,
+     default_qty_value     = 100,
+     commission_type       = strategy.commission.percent,
+     commission_value      = 0.1,
+     slippage              = 2,
+     pyramiding            = 0,
+     margin_long           = 100,
+     margin_short          = 100,
+     calc_on_every_tick    = false,
+     process_orders_on_close = false)
+
+// ───────────────────────────── Inputs ─────────────────────────────
+const string G_SIG  = "1) Señal de entrada"
+const string G_REG  = "2) Filtro de régimen"
+const string G_RISK = "3) Riesgo y salidas"
+const string G_DIR  = "4) Dirección y fechas"
+const string G_ALR  = "5) Mensajes de alerta (webhook)"
+
+entryMode  = input.string("Supertrend", "Tipo de señal", options = ["Supertrend", "Cruce EMAs", "Ruptura Donchian"], group = G_SIG)
+stFactor   = input.float(3.0, "Supertrend: multiplicador", minval = 0.5, step = 0.1, group = G_SIG)
+stAtrLen   = input.int(10, "Supertrend: periodo ATR", minval = 1, group = G_SIG)
+emaFastLen = input.int(21, "EMA rápida", minval = 1, group = G_SIG)
+emaSlowLen = input.int(55, "EMA lenta", minval = 2, group = G_SIG)
+dcEntryLen = input.int(20, "Donchian: periodo de entrada", minval = 2, group = G_SIG)
+dcExitLen  = input.int(10, "Donchian: periodo de salida", minval = 2, group = G_SIG)
+
+useRegime  = input.bool(true, "Usar filtro EMA de marco superior", group = G_REG)
+regimeTf   = input.timeframe("D", "Marco temporal del filtro", group = G_REG)
+regimeLen  = input.int(200, "Periodo EMA del filtro", minval = 2, group = G_REG)
+exitOnRegime = input.bool(true, "Salir si se pierde el régimen", group = G_REG)
+useAdx     = input.bool(false, "Usar filtro ADX", group = G_REG)
+adxLen     = input.int(14, "ADX: periodo", minval = 2, group = G_REG)
+adxMin     = input.float(20.0, "ADX mínimo", minval = 0, group = G_REG)
+
+atrLen     = input.int(14, "ATR: periodo (stops)", minval = 1, group = G_RISK)
+slMult     = input.float(2.5, "Stop inicial = ATR ×", minval = 0.1, step = 0.1, group = G_RISK)
+useTrail   = input.bool(true, "Usar trailing stop", group = G_RISK)
+trailMult  = input.float(3.5, "Trailing stop = ATR ×", minval = 0.1, step = 0.1, group = G_RISK)
+useTp      = input.bool(false, "Usar take profit fijo", group = G_RISK)
+tpMult     = input.float(6.0, "Take profit = ATR ×", minval = 0.1, step = 0.1, group = G_RISK)
+useRiskSz  = input.bool(true, "Tamaño por riesgo (si no: 100 % del capital)", group = G_RISK)
+riskPct    = input.float(2.0, "Riesgo por operación (% del capital)", minval = 0.1, maxval = 100, step = 0.1, group = G_RISK)
+maxExpoPct = input.float(100.0, "Exposición máxima (% del capital)", minval = 1, maxval = 100, group = G_RISK)
+qtyDecimals = input.int(5, "Decimales de la cantidad (BTC)", minval = 0, maxval = 8, group = G_RISK)
+
+allowLong  = input.bool(true, "Permitir largos", group = G_DIR)
+allowShort = input.bool(false, "Permitir cortos (solo futuros/margen)", group = G_DIR)
+startDate  = input.time(timestamp("2018-01-01T00:00:00"), "Desde", group = G_DIR)
+endDate    = input.time(timestamp("2099-12-31T00:00:00"), "Hasta", group = G_DIR)
+
+msgLongEntry  = input.text_area('{"action":"buy","symbol":"{{ticker}}","qty":"{{strategy.order.contracts}}","price":"{{close}}","reason":"entry"}', "Mensaje: entrada en largo", group = G_ALR)
+msgLongExit   = input.text_area('{"action":"sell","symbol":"{{ticker}}","qty":"{{strategy.order.contracts}}","price":"{{close}}","reason":"exit"}', "Mensaje: salida de largo", group = G_ALR)
+msgShortEntry = input.text_area('{"action":"sell_short","symbol":"{{ticker}}","qty":"{{strategy.order.contracts}}","price":"{{close}}","reason":"entry"}', "Mensaje: entrada en corto", group = G_ALR)
+msgShortExit  = input.text_area('{"action":"buy_to_cover","symbol":"{{ticker}}","qty":"{{strategy.order.contracts}}","price":"{{close}}","reason":"exit"}', "Mensaje: salida de corto", group = G_ALR)
+
+// ─────────────────────────── Indicadores ───────────────────────────
+inDate = time >= startDate and time <= endDate
+
+// EMA de marco superior SIN repintado: valor de la vela superior ya cerrada.
+regimeEma = request.security(syminfo.tickerid, regimeTf, ta.ema(close, regimeLen)[1], lookahead = barmerge.lookahead_on)
+regimeUp   = not useRegime or (not na(regimeEma) and close > regimeEma)
+regimeDown = not useRegime or (not na(regimeEma) and close < regimeEma)
+
+[diPlus, diMinus, adx] = ta.dmi(adxLen, adxLen)
+adxOk = not useAdx or adx >= adxMin
+
+atr = ta.atr(atrLen)
+
+[stLine, stDir] = ta.supertrend(stFactor, stAtrLen)   // stDir < 0 = tendencia alcista
+emaFast = ta.ema(close, emaFastLen)
+emaSlow = ta.ema(close, emaSlowLen)
+dcHigh  = ta.highest(high, dcEntryLen)[1]
+dcLow   = ta.lowest(low, dcEntryLen)[1]
+dcExitLow  = ta.lowest(low, dcExitLen)[1]
+dcExitHigh = ta.highest(high, dcExitLen)[1]
+
+stFlipUp   = stDir < 0 and stDir[1] > 0
+stFlipDown = stDir > 0 and stDir[1] < 0
+
+bool sigLong = switch entryMode
+    "Supertrend"   => stFlipUp
+    "Cruce EMAs"   => ta.crossover(emaFast, emaSlow)
+    => close > dcHigh
+
+bool sigShort = switch entryMode
+    "Supertrend"   => stFlipDown
+    "Cruce EMAs"   => ta.crossunder(emaFast, emaSlow)
+    => close < dcLow
+
+bool sigExitLong = switch entryMode
+    "Supertrend"   => stFlipDown
+    "Cruce EMAs"   => ta.crossunder(emaFast, emaSlow)
+    => close < dcExitLow
+
+bool sigExitShort = switch entryMode
+    "Supertrend"   => stFlipUp
+    "Cruce EMAs"   => ta.crossover(emaFast, emaSlow)
+    => close > dcExitHigh
+
+if exitOnRegime and useRegime
+    sigExitLong  := sigExitLong  or (not na(regimeEma) and close < regimeEma)
+    sigExitShort := sigExitShort or (not na(regimeEma) and close > regimeEma)
+
+longEntry  = inDate and allowLong  and sigLong  and regimeUp   and adxOk and barstate.isconfirmed
+shortEntry = inDate and allowShort and sigShort and regimeDown and adxOk and barstate.isconfirmed
+
+// ───────────────────────── Tamaño de posición ─────────────────────────
+f_qty(float stopDist) =>
+    float maxQty = strategy.equity * maxExpoPct / 100.0 / close
+    float q = useRiskSz and stopDist > 0 ? math.min(strategy.equity * riskPct / 100.0 / stopDist, maxQty) : maxQty
+    float factor = math.pow(10, qtyDecimals)
+    math.floor(q * factor) / factor
+
+// ───────────────────────────── Órdenes ─────────────────────────────
+var float longStop  = na
+var float shortStop = na
+var float longTp    = na
+var float shortTp   = na
+
+if strategy.position_size == 0 and not longEntry and not shortEntry
+    longStop  := na
+    shortStop := na
+    longTp    := na
+    shortTp   := na
+
+stopDist = atr * slMult
+
+if longEntry and strategy.position_size <= 0
+    float q = f_qty(stopDist)
+    if q > 0
+        longStop := close - stopDist
+        longTp   := useTp ? close + atr * tpMult : na
+        strategy.entry("Long", strategy.long, qty = q, alert_message = msgLongEntry)
+
+if shortEntry and strategy.position_size >= 0
+    float q = f_qty(stopDist)
+    if q > 0
+        shortStop := close + stopDist
+        shortTp   := useTp ? close - atr * tpMult : na
+        strategy.entry("Short", strategy.short, qty = q, alert_message = msgShortEntry)
+
+// Trailing stop: solo se mueve a favor, nunca en contra.
+if strategy.position_size > 0 and useTrail and not na(longStop)
+    longStop := math.max(longStop, close - atr * trailMult)
+if strategy.position_size < 0 and useTrail and not na(shortStop)
+    shortStop := math.min(shortStop, close + atr * trailMult)
+
+strategy.exit("Long SL/TP", from_entry = "Long", stop = longStop, limit = longTp, alert_message = msgLongExit)
+strategy.exit("Short SL/TP", from_entry = "Short", stop = shortStop, limit = shortTp, alert_message = msgShortExit)
+
+if strategy.position_size > 0 and sigExitLong and barstate.isconfirmed
+    strategy.close("Long", comment = "Salida por señal", alert_message = msgLongExit)
+if strategy.position_size < 0 and sigExitShort and barstate.isconfirmed
+    strategy.close("Short", comment = "Salida por señal", alert_message = msgShortExit)
+
+// ───────────────────────────── Gráfico ─────────────────────────────
+plot(useRegime ? regimeEma : na, "EMA régimen", color = color.new(color.orange, 0), linewidth = 2)
+plot(entryMode == "Cruce EMAs" ? emaFast : na, "EMA rápida", color = color.new(color.teal, 0))
+plot(entryMode == "Cruce EMAs" ? emaSlow : na, "EMA lenta", color = color.new(color.purple, 0))
+plot(entryMode == "Supertrend" ? stLine : na, "Supertrend", color = stDir < 0 ? color.new(color.green, 0) : color.new(color.red, 0), style = plot.style_linebr)
+plot(entryMode == "Ruptura Donchian" ? dcHigh : na, "Donchian alto", color = color.new(color.blue, 40))
+plot(entryMode == "Ruptura Donchian" ? dcExitLow : na, "Donchian salida", color = color.new(color.blue, 70))
+plot(strategy.position_size > 0 ? longStop : na, "Stop largo", color = color.new(color.red, 0), style = plot.style_linebr, linewidth = 2)
+plot(strategy.position_size < 0 ? shortStop : na, "Stop corto", color = color.new(color.red, 0), style = plot.style_linebr, linewidth = 2)
+plotshape(longEntry, "Señal compra", shape.triangleup, location.belowbar, color.new(color.green, 0), size = size.small)
+plotshape(shortEntry, "Señal venta", shape.triangledown, location.abovebar, color.new(color.red, 0), size = size.small)
+bgcolor(useRegime and not na(regimeEma) ? (close > regimeEma ? color.new(color.green, 94) : color.new(color.red, 94)) : na, title = "Fondo régimen")
