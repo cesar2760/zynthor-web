@@ -82,6 +82,28 @@ def plan_orders(current: Decimal, target: Decimal, min_btc: Decimal) -> list[Pla
     return orders
 
 
+def parse_protection(payload: dict) -> tuple[Decimal | None, Decimal | None]:
+    """SL y TP opcionales enviados por la estrategia (vacíos o ausentes = None)."""
+    out = []
+    for key in ("sl", "tp"):
+        raw = str(payload.get(key, "") or "").strip()
+        try:
+            val = Decimal(raw) if raw else None
+        except Exception:  # noqa: BLE001
+            val = None
+        out.append(val if val is not None and val > 0 else None)
+    return out[0], out[1]
+
+
+def protection_valid(target: Decimal, ref_price: Decimal, sl: Decimal | None, tp: Decimal | None) -> bool:
+    """El SL debe quedar del lado de la pérdida y el TP del lado de la ganancia."""
+    if target > 0:
+        return (sl is None or sl < ref_price) and (tp is None or tp > ref_price)
+    if target < 0:
+        return (sl is None or sl > ref_price) and (tp is None or tp < ref_price)
+    return False
+
+
 def check_secret(payload: dict, expected: str) -> bool:
     got = str(payload.get("secret", ""))
     return bool(expected) and hmac.compare_digest(got.encode(), expected.encode())
@@ -133,7 +155,38 @@ class Broker:
         contracts = (btc / self.contract_size).quantize(Decimal("1e-8"), rounding=ROUND_DOWN)
         return self.ex.amount_to_precision(self.symbol, float(contracts))
 
-    def sync(self, target: Decimal) -> dict:
+    def protect(self, target: Decimal, sl: Decimal | None, tp: Decimal | None) -> list[dict]:
+        """Coloca SL y TP reduceOnly en BYDFi para la posición abierta."""
+        placed: list[dict] = []
+        if sl is None and tp is None:
+            return placed
+        ref = Decimal(str(self.ex.fetch_ticker(self.symbol)["last"]))
+        if not protection_valid(target, ref, sl, tp):
+            log.warning("SL/TP inválidos para precio %s: sl=%s tp=%s", ref, sl, tp)
+            return [{"skipped": "SL/TP del lado equivocado del precio actual"}]
+        side = "sell" if target > 0 else "buy"
+        amount = self.to_contracts(abs(target))
+        for kind, price in (("stopLossPrice", sl), ("takeProfitPrice", tp)):
+            if price is None:
+                continue
+            entry = {"type": kind, "price": str(price), "contracts": amount}
+            if self.dry_run:
+                entry["skipped"] = "DRY_RUN"
+            else:
+                params = {kind: float(price), "reduceOnly": True}
+                entry["order_id"] = self.ex.create_order(self.symbol, "market", side, float(amount), None, params).get("id")
+            placed.append(entry)
+        return placed
+
+    def cancel_open_orders(self) -> None:
+        if self.dry_run:
+            return
+        try:
+            self.ex.cancel_all_orders(self.symbol)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("cancel_all_orders falló: %s", exc)
+
+    def sync(self, target: Decimal, sl: Decimal | None = None, tp: Decimal | None = None) -> dict:
         with self.lock:
             current = self.position_btc()
             orders = plan_orders(current, target, self.min_btc)
@@ -152,6 +205,11 @@ class Broker:
                     order = self.ex.create_order(self.symbol, "market", o.side, float(amount), None, params)
                     entry["order_id"] = order.get("id")
                 result["orders"].append(entry)
+            if orders:
+                # La posición cambió: los SL/TP anteriores ya no sirven.
+                self.cancel_open_orders()
+                if target != 0:
+                    result["protection"] = self.protect(target, sl, tp)
             log.info("sync %s", json.dumps(result))
             return result
 
@@ -190,7 +248,8 @@ def create_app(broker: Broker, secret: str, allow_short: bool, max_btc: Decimal,
         except ValueError as exc:
             return jsonify(error=str(exc)), 400
         try:
-            return jsonify(broker.sync(target))
+            sl, tp = parse_protection(payload)
+            return jsonify(broker.sync(target, sl, tp))
         except Exception as exc:  # noqa: BLE001
             log.exception("error al operar")
             return jsonify(error=str(exc)), 502

@@ -109,6 +109,57 @@ Protecciones:
 
 Si cambias cualquier parámetro de la estrategia, **borra y vuelve a crear la alerta**. La alerta guarda la configuración del momento en que se creó.
 
+## 4. Scalping en futuros (5 min / 1 min): `btc_scalper.pine`
+
+Es una estrategia aparte, pensada para hacer **muchas operaciones** en `BYDFI:BTCUSDT.P` y aprovechar el reembolso de comisiones.
+
+| Pieza | Por defecto |
+|---|---|
+| Tendencia | Precio sobre/bajo la EMA 200 de **15 min** + EMA 21 con pendiente a favor |
+| Entrada | RSI(7) sale de 30 (largos) o de 70 (cortos), o toque a la EMA 21 |
+| Salidas | TP 1.5 × ATR, SL 1.0 × ATR, cierre a las 12 velas |
+| Filtro | Solo opera si el ATR es ≥ 0.08 % del precio (si no, las comisiones se comen el objetivo) |
+| Riesgo | 0.5 % del capital por operación, máximo 5x de exposición |
+| Protecciones | Para el día al perder un 3 %, máximo 30 operaciones al día |
+| Comisión del backtest | 0.018 % por lado (0.06 % taker × 30 % que pagas tras el reembolso del 70 %) |
+
+### Las cuentas de las comisiones (lo más importante)
+
+Las cifras suponen una comisión taker del 0.06 %. Confirma tu comisión real en BYDFi y pon la neta en
+**Propiedades → Comisión**.
+
+| | Sin reembolso | Con 70 % de reembolso |
+|---|---|---|
+| Coste de ida y vuelta | 0.12 % | **0.036 %** |
+| Ganancia neta si llega al TP (ATR = 0.08 % → TP 0.12 %) | 0.00 % | 0.084 % |
+| Pérdida neta si salta el SL (0.08 %) | 0.20 % | 0.116 % |
+| % de aciertos necesario para no perder | imposible | **~58 %** |
+
+Sin el reembolso, este scalping no puede ganar. Con el reembolso es posible, pero necesitas acertar
+más de la mitad de las veces, y antes de eso hay que comprobarlo en el Probador.
+
+### Cómo probarlo
+
+1. Gráfico `BYDFI:BTCUSDT.P` en **5 min**. En 1 min hay más ruido y el retraso del webhook (1 a 5 s) pesa más; empieza por 5 min.
+2. En Propiedades: capital inicial = tu capital real, comisión = tu comisión neta, deslizamiento ≥ 1 tick.
+3. Mira el **% de aciertos**, el **factor de beneficio** (> 1.2 en scalping ya es bueno), el drawdown y que haya cientos de operaciones.
+4. Prueba las dos entradas y TP/SL de 1.0–2.0 × ATR. Si solo gana con un valor exacto, está sobreajustado.
+
+### Relay para scalping
+
+- En `.env`: `ALLOW_SHORT=true`, `LEVERAGE=5` (igual o mayor que el apalancamiento máximo de la estrategia) y `MARGIN_MODE=isolated`.
+- La entrada envía el SL y el TP, y el relay los deja **puestos en BYDFi** como órdenes `reduceOnly`.
+  Así la posición sigue protegida aunque TradingView, el webhook o tu servidor fallen. Cuando la posición
+  se cierra, el relay cancela las órdenes que queden abiertas.
+- Pon el servidor cerca de BYDFi (VPS en Asia o Europa) para reducir el retraso.
+
+### Antes de ir en real
+
+- **El 70 % de comisión:** si es una comisión de **afiliado** (referidos), revisa los términos de BYDFi.
+  Muchos exchanges prohíben cobrar comisiones de afiliado por operaciones de tu propia cuenta y pueden retirarlas o bloquear la cuenta.
+- Hay **liquidación** con apalancamiento y el backtest de TradingView no la simula. Mantén el apalancamiento bajo y el margen aislado.
+- Empieza con `DRY_RUN=true`, luego con el mínimo, y compara cada día el resultado real con el del Probador.
+
 ## Advertencias
 
 - Los resultados pasados no garantizan los futuros. Esto no es asesoría financiera.

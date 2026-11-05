@@ -32,10 +32,20 @@ class FakeExchange:
         return [{"symbol": symbols[0], "contracts": float(abs(self.pos) / self.cs),
                  "side": "long" if self.pos > 0 else "short"}]
 
+    def fetch_ticker(self, symbol):
+        return {"last": 100000.0}
+
+    def cancel_all_orders(self, symbol):
+        self.cancelled = getattr(self, "cancelled", 0) + 1
+        self.orders = [o for o in self.orders if "stopLossPrice" not in o[2] and "takeProfitPrice" not in o[2]]
+
     def amount_to_precision(self, symbol, amount):
         return str(int(amount))
 
     def create_order(self, symbol, type_, side, amount, price, params):
+        if "stopLossPrice" in params or "takeProfitPrice" in params:
+            self.orders.append((side, amount, params))
+            return {"id": str(len(self.orders))}
         btc = D(str(amount)) * self.cs
         self.pos += btc if side == "buy" else -btc
         self.orders.append((side, amount, params))
@@ -104,6 +114,36 @@ class AppTests(unittest.TestCase):
         self.post(app, {"secret": SECRET, "market_position": "flat", "position_size": "0"})
         self.assertEqual(ex.orders[-1], ("sell", 12, {"reduceOnly": True}))
         self.assertEqual(ex.pos, 0)
+
+    def test_entry_places_exchange_sl_tp(self):
+        ex, app = self.make()
+        r = self.post(app, {"secret": SECRET, "market_position": "short", "position_size": "0.01",
+                            "sl": "100500", "tp": "99000"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(ex.pos, 0)  # cortos desactivados en make(): objetivo = plano
+        ex2 = FakeExchange()
+        broker = Broker(ex2, "BTC/USDT:USDT", False)
+        broker.setup(1, "isolated")
+        app2 = create_app(broker, SECRET, True, D("0.05")).test_client()
+        self.post(app2, {"secret": SECRET, "market_position": "short", "position_size": "0.01",
+                         "sl": "100500", "tp": "99000"})
+        self.assertEqual(ex2.pos, D("-0.01"))
+        kinds = [list(o[2].keys())[0] for o in ex2.orders[1:]]
+        self.assertEqual(kinds, ["stopLossPrice", "takeProfitPrice"])
+        self.assertTrue(all(o[0] == "buy" and o[2]["reduceOnly"] for o in ex2.orders[1:]))
+        self.post(app2, {"secret": SECRET, "market_position": "flat", "position_size": "0", "sl": "", "tp": ""})
+        self.assertEqual(ex2.pos, 0)
+        self.assertFalse(any("stopLossPrice" in o[2] for o in ex2.orders))
+
+    def test_wrong_side_sl_is_rejected(self):
+        ex = FakeExchange()
+        broker = Broker(ex, "BTC/USDT:USDT", False)
+        broker.setup(1, "isolated")
+        app = create_app(broker, SECRET, False, D("0.05")).test_client()
+        r = self.post(app, {"secret": SECRET, "market_position": "long", "position_size": "0.01",
+                            "sl": "101000", "tp": "102000"})
+        self.assertIn("skipped", r.get_json()["protection"][0])
+        self.assertEqual(ex.pos, D("0.01"))
 
     def test_dry_run_sends_nothing(self):
         ex, app = self.make(dry_run=True)
