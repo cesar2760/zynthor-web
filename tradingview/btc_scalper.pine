@@ -45,11 +45,13 @@ const string G_ALR  = "6) Mensaje de alerta (relay BYDFi)"
 trendTf   = input.timeframe("15", "Marco de la EMA de tendencia", group = G_TR)
 trendLen  = input.int(200, "EMA de tendencia: periodo", minval = 2, group = G_TR)
 emaLen    = input.int(21, "EMA rápida", minval = 2, group = G_TR)
+useSlope  = input.bool(false, "Exigir pendiente de la EMA rápida", group = G_TR)
 
 entryMode = input.string("Retroceso RSI", "Tipo de entrada", options = ["Retroceso RSI", "Toque EMA rápida"], group = G_SIG)
 rsiLen    = input.int(7, "RSI: periodo", minval = 2, group = G_SIG)
-rsiLow    = input.float(30, "RSI sobreventa (largos)", minval = 1, maxval = 50, group = G_SIG)
-rsiHigh   = input.float(70, "RSI sobrecompra (cortos)", minval = 50, maxval = 99, group = G_SIG)
+rsiLow    = input.float(40, "RSI: nivel de retroceso en largos", minval = 1, maxval = 50, group = G_SIG,
+     tooltip = "Con 30 casi nunca coincide con una tendencia alcista: el bot apenas opera. 40 da muchas más entradas.")
+rsiHigh   = input.float(60, "RSI: nivel de retroceso en cortos", minval = 50, maxval = 99, group = G_SIG)
 allowLong  = input.bool(true, "Permitir largos", group = G_SIG)
 allowShort = input.bool(true, "Permitir cortos", group = G_SIG)
 
@@ -70,11 +72,13 @@ sessionStr = input.session("0000-2400", "Sesión (UTC)", group = G_FLT)
 startDate  = input.time(timestamp("2024-01-01T00:00:00"), "Desde", group = G_FLT)
 endDate    = input.time(timestamp("2099-12-31T00:00:00"), "Hasta", group = G_FLT)
 
-relayMsg = input.text_area('{"secret":"CAMBIA_ESTE_SECRETO","symbol":"{{ticker}}","market_position":"{{strategy.market_position}}","position_size":"{{strategy.market_position_size}}","action":"{{strategy.order.action}}","contracts":"{{strategy.order.contracts}}","price":"{{close}}","order_id":"{{strategy.order.id}}","sl":"%SL%","tp":"%TP%"}', "Mensaje para todas las órdenes", group = G_ALR)
+relayMsg = input.text_area('{"secret":"CAMBIA_ESTE_SECRETO","symbol":"{{ticker}}","market_position":"{{strategy.market_position}}","position_size":"{{strategy.market_position_size}}","action":"{{strategy.order.action}}","contracts":"{{strategy.order.contracts}}","price":"{{close}}","order_id":"{{strategy.order.id}}","sl_dist":"%SLD%","tp_dist":"%TPD%"}', "Mensaje para todas las órdenes", group = G_ALR)
 
-f_msg(float slPrice, float tpPrice) =>
-    string m = str.replace_all(relayMsg, "%SL%", na(slPrice) ? "" : str.tostring(slPrice, format.mintick))
-    str.replace_all(m, "%TP%", na(tpPrice) ? "" : str.tostring(tpPrice, format.mintick))
+// Se envían DISTANCIAS (no precios): el relay pone el SL/TP en BYDFi a esa distancia
+// del precio real de entrada, igual que hace aquí strategy.exit con loss/profit.
+f_msg(float slDist, float tpDist) =>
+    string m = str.replace_all(relayMsg, "%SLD%", na(slDist) ? "" : str.tostring(slDist, format.mintick))
+    str.replace_all(m, "%TPD%", na(tpDist) ? "" : str.tostring(tpDist, format.mintick))
 
 // ─────────────────────────── Indicadores ───────────────────────────
 trendEma = request.security(syminfo.tickerid, trendTf, ta.ema(close, trendLen)[1], lookahead = barmerge.lookahead_on)
@@ -83,8 +87,8 @@ rsi      = ta.rsi(close, rsiLen)
 atr      = ta.atr(atrLen)
 atrPct   = atr / close * 100
 
-upTrend = not na(trendEma) and close > trendEma and emaFast > emaFast[1]
-dnTrend = not na(trendEma) and close < trendEma and emaFast < emaFast[1]
+upTrend = not na(trendEma) and close > trendEma and (not useSlope or emaFast > emaFast[1])
+dnTrend = not na(trendEma) and close < trendEma and (not useSlope or emaFast < emaFast[1])
 
 bool longSig = switch entryMode
     "Retroceso RSI" => ta.crossover(rsi, rsiLow)
@@ -116,8 +120,11 @@ f_qty(float stopDist) =>
     math.floor(math.min(riskQty, maxQty) * factor) / factor
 
 // ───────────────────────────── Órdenes ─────────────────────────────
-var float sl = na
-var float tp = na
+// SL/TP medidos desde el precio REAL de entrada (loss/profit en ticks), no desde el
+// cierre de la vela de señal. Antes la entrada se llenaba en la apertura siguiente y
+// el SL/TP quedaban descolocados (salidas en la misma vela, ganancia ≈ pérdida).
+var float slDist = na
+var float tpDist = na
 var int entryBar = na
 
 stopDist = atr * slMult
@@ -125,22 +132,24 @@ stopDist = atr * slMult
 if canEnter and allowLong and upTrend and longSig
     float q = f_qty(stopDist)
     if q > 0
-        sl := close - stopDist
-        tp := close + atr * tpMult
+        slDist := stopDist
+        tpDist := atr * tpMult
         entryBar := bar_index
         tradesToday += 1
-        strategy.entry("Long", strategy.long, qty = q, alert_message = f_msg(sl, tp))
+        strategy.entry("Long", strategy.long, qty = q, alert_message = f_msg(slDist, tpDist))
 else if canEnter and allowShort and dnTrend and shortSig
     float q = f_qty(stopDist)
     if q > 0
-        sl := close + stopDist
-        tp := close - atr * tpMult
+        slDist := stopDist
+        tpDist := atr * tpMult
         entryBar := bar_index
         tradesToday += 1
-        strategy.entry("Short", strategy.short, qty = q, alert_message = f_msg(sl, tp))
+        strategy.entry("Short", strategy.short, qty = q, alert_message = f_msg(slDist, tpDist))
 
-strategy.exit("Long TP/SL", from_entry = "Long", stop = sl, limit = tp, alert_message = f_msg(na, na))
-strategy.exit("Short TP/SL", from_entry = "Short", stop = sl, limit = tp, alert_message = f_msg(na, na))
+slTicks = na(slDist) ? na : math.max(1, math.round(slDist / syminfo.mintick))
+tpTicks = na(tpDist) ? na : math.max(1, math.round(tpDist / syminfo.mintick))
+strategy.exit("Long TP/SL", from_entry = "Long", loss = slTicks, profit = tpTicks, alert_message = f_msg(na, na))
+strategy.exit("Short TP/SL", from_entry = "Short", loss = slTicks, profit = tpTicks, alert_message = f_msg(na, na))
 
 timeUp = maxBars > 0 and not na(entryBar) and bar_index - entryBar >= maxBars
 if strategy.position_size != 0 and barstate.isconfirmed and (timeUp or dayLossHit)
@@ -152,6 +161,7 @@ if strategy.position_size == 0 and not canEnter
 // ───────────────────────────── Gráfico ─────────────────────────────
 plot(trendEma, "EMA tendencia", color = color.new(color.orange, 0), linewidth = 2)
 plot(emaFast, "EMA rápida", color = color.new(color.teal, 0))
-plot(strategy.position_size != 0 ? sl : na, "Stop", color = color.new(color.red, 0), style = plot.style_linebr)
-plot(strategy.position_size != 0 ? tp : na, "Objetivo", color = color.new(color.green, 0), style = plot.style_linebr)
+posDir = math.sign(strategy.position_size)
+plot(posDir != 0 ? strategy.position_avg_price - posDir * slDist : na, "Stop", color = color.new(color.red, 0), style = plot.style_linebr)
+plot(posDir != 0 ? strategy.position_avg_price + posDir * tpDist : na, "Objetivo", color = color.new(color.green, 0), style = plot.style_linebr)
 bgcolor(dayLossHit ? color.new(color.red, 85) : not volOk ? color.new(color.gray, 92) : na, title = "Bloqueos")

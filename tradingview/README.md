@@ -115,9 +115,9 @@ Es una estrategia aparte, pensada para hacer **muchas operaciones** en `BYDFI:BT
 
 | Pieza | Por defecto |
 |---|---|
-| Tendencia | Precio sobre/bajo la EMA 200 de **15 min** + EMA 21 con pendiente a favor |
-| Entrada | RSI(7) sale de 30 (largos) o de 70 (cortos), o toque a la EMA 21 |
-| Salidas | TP 1.5 × ATR, SL 1.0 × ATR, cierre a las 12 velas |
+| Tendencia | Precio sobre/bajo la EMA 200 de **15 min** (pendiente de la EMA 21 opcional) |
+| Entrada | RSI(7) vuelve a subir por encima de 40 (largos) o a bajar por debajo de 60 (cortos), o toque a la EMA 21 |
+| Salidas | TP 1.5 × ATR, SL 1.0 × ATR **medidos desde el precio real de entrada**, cierre a las 12 velas |
 | Filtro | Solo opera si el ATR es ≥ 0.08 % del precio (si no, las comisiones se comen el objetivo) |
 | Riesgo | 0.5 % del capital por operación, máximo 5x de exposición |
 | Protecciones | Para el día al perder un 3 %, máximo 30 operaciones al día |
@@ -140,9 +140,9 @@ más de la mitad de las veces, y antes de eso hay que comprobarlo en el Probador
 
 ### Cómo probarlo
 
-1. Gráfico `BYDFI:BTCUSDT.P` en **5 min**. En 1 min hay más ruido y el retraso del webhook (1 a 5 s) pesa más; empieza por 5 min.
+1. Gráfico `BYDFI:BTCUSDT.P` en **5 min** (si usas 15 min, pon el marco de tendencia en 60). En 1 min hay más ruido y el retraso del webhook (1 a 5 s) pesa más; empieza por 5 min.
 2. En Propiedades: capital inicial = tu capital real, comisión = tu comisión neta, deslizamiento ≥ 1 tick.
-3. Mira el **% de aciertos**, el **factor de beneficio** (> 1.2 en scalping ya es bueno), el drawdown y que haya cientos de operaciones.
+3. Con menos de ~200 operaciones el resultado no dice nada. Mira el **% de aciertos**, el **factor de beneficio** (> 1.2 en scalping ya es bueno), el drawdown y que haya cientos de operaciones.
 4. Prueba las dos entradas y TP/SL de 1.0–2.0 × ATR. Si solo gana con un valor exacto, está sobreajustado.
 
 ### Relay para scalping

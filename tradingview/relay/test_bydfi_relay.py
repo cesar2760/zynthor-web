@@ -30,7 +30,7 @@ class FakeExchange:
         if self.pos == 0:
             return []
         return [{"symbol": symbols[0], "contracts": float(abs(self.pos) / self.cs),
-                 "side": "long" if self.pos > 0 else "short"}]
+                 "side": "long" if self.pos > 0 else "short", "entryPrice": 99950.0}]
 
     def fetch_ticker(self, symbol):
         return {"last": 100000.0}
@@ -38,6 +38,9 @@ class FakeExchange:
     def cancel_all_orders(self, symbol):
         self.cancelled = getattr(self, "cancelled", 0) + 1
         self.orders = [o for o in self.orders if "stopLossPrice" not in o[2] and "takeProfitPrice" not in o[2]]
+
+    def price_to_precision(self, symbol, price):
+        return str(round(price, 1))
 
     def amount_to_precision(self, symbol, amount):
         return str(int(amount))
@@ -144,6 +147,16 @@ class AppTests(unittest.TestCase):
                             "sl": "101000", "tp": "102000"})
         self.assertIn("skipped", r.get_json()["protection"][0])
         self.assertEqual(ex.pos, D("0.01"))
+
+    def test_distances_measured_from_real_entry(self):
+        ex = FakeExchange()
+        broker = Broker(ex, "BTC/USDT:USDT", False)
+        broker.setup(5, "isolated")
+        app = create_app(broker, SECRET, True, D("0.05")).test_client()
+        r = self.post(app, {"secret": SECRET, "market_position": "long", "position_size": "0.01",
+                            "sl_dist": "80", "tp_dist": "120"})
+        prices = {p["type"]: p["price"] for p in r.get_json()["protection"]}
+        self.assertEqual(prices, {"stopLossPrice": "99870.0", "takeProfitPrice": "100070.0"})
 
     def test_dry_run_sends_nothing(self):
         ex, app = self.make(dry_run=True)
