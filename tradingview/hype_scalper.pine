@@ -1,0 +1,238 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0
+// https://mozilla.org/MPL/2.0/
+//
+// HYPE Scalper (Zynthor) - BYDFI:HYPEUSDT.P, 5 min
+// Misma lógica que btc_scalper.pine, con ajustes para un activo mucho más volátil:
+// TP mínimo más amplio, menos apalancamiento, más deslizamiento y menos operaciones al día.
+// ------------------------------------------------------------------------------
+// Idea: entrar a favor de la tendencia corta en retrocesos, con objetivo y stop
+// pequeños, para muchas operaciones al día. Pensado para una cuenta con
+// reembolso de comisiones (por ejemplo, 70 %): pon la comisión NETA en
+// Propiedades -> Comisión. Ejemplo: taker 0.06 % x (1 - 0.70) = 0.018 %.
+//
+//   1. Tendencia: precio sobre/bajo la EMA 200 de 15 min (vela cerrada, sin repintado)
+//      y la EMA rápida subiendo/bajando.
+//   2. Entrada en retroceso: RSI(7) sale de sobreventa/sobrecompra, o toque a la EMA rápida.
+//   3. Filtro de volatilidad: solo opera si el ATR es lo bastante grande para cubrir comisiones.
+//   4. Salidas: take profit y stop loss por ATR + salida por tiempo.
+//   5. Protecciones: pérdida máxima diaria, máximo de operaciones al día y tope de apalancamiento.
+//   6. Cada orden envía un mensaje para el relay de BYDFi (tradingview/relay). La entrada
+//      incluye el SL y el TP para que el relay los deje puestos en el exchange.
+//
+// AVISO: el scalping es la forma de trading en la que más gente pierde. No es asesoría
+// financiera. Prueba primero con DRY_RUN y luego con un importe muy pequeño.
+// ------------------------------------------------------------------------------
+//@version=6
+strategy("HYPE Scalper (Zynthor)", shorttitle = "HYPE Scalper", overlay = true,
+     initial_capital         = 1000,
+     default_qty_type        = strategy.percent_of_equity,
+     default_qty_value       = 100,
+     commission_type         = strategy.commission.percent,
+     commission_value        = 0.018,
+     slippage                = 3,
+     pyramiding              = 0,
+     margin_long             = 20,
+     margin_short            = 20,
+     calc_on_every_tick      = false,
+     process_orders_on_close = false)
+
+// ───────────────────────────── Inputs ─────────────────────────────
+const string G_TR   = "1) Tendencia"
+const string G_SIG  = "2) Entrada"
+const string G_EXIT = "3) Salidas"
+const string G_RISK = "4) Riesgo"
+const string G_FLT  = "5) Filtros y fechas"
+const string G_ALR  = "6) Mensaje de alerta (relay BYDFi)"
+
+trendTf   = input.timeframe("15", "Marco de la EMA de tendencia", group = G_TR)
+trendLen  = input.int(200, "EMA de tendencia: periodo", minval = 2, group = G_TR)
+emaLen    = input.int(21, "EMA rápida", minval = 2, group = G_TR)
+useSlope  = input.bool(false, "Exigir pendiente de la EMA rápida", group = G_TR)
+useTrend  = input.bool(true, "Usar filtro de tendencia (apagado = más entradas, más riesgo)", group = G_TR)
+
+entryMode = input.string("Todas (más entradas)", "Tipo de entrada", options = ["Todas (más entradas)", "Retroceso RSI", "Toque EMA rápida", "Cruce EMAs"], group = G_SIG,
+     tooltip = "Todas = entra con cualquiera de las tres señales.")
+emaMicroLen = input.int(9, "Cruce EMAs: EMA micro (cruza la EMA rápida)", minval = 2, group = G_SIG)
+rsiLen    = input.int(7, "RSI: periodo", minval = 2, group = G_SIG)
+rsiLow    = input.float(40, "RSI: nivel de retroceso en largos", minval = 1, maxval = 50, group = G_SIG,
+     tooltip = "Con 30 casi nunca coincide con una tendencia alcista: el bot apenas opera. 40 da muchas más entradas.")
+rsiHigh   = input.float(60, "RSI: nivel de retroceso en cortos", minval = 50, maxval = 99, group = G_SIG)
+allowLong  = input.bool(true, "Permitir largos", group = G_SIG)
+allowShort = input.bool(true, "Permitir cortos", group = G_SIG)
+
+atrLen    = input.int(14, "ATR: periodo", minval = 1, group = G_EXIT)
+tpMult    = input.float(1.5, "Take profit = ATR ×", minval = 0.1, step = 0.1, group = G_EXIT)
+slMult    = input.float(1.0, "Stop loss = ATR ×", minval = 0.1, step = 0.1, group = G_EXIT)
+maxBars   = input.int(12, "Salida por tiempo (velas, 0 = no)", minval = 0, group = G_EXIT)
+
+riskPct     = input.float(0.4, "Riesgo por operación (% del capital)", minval = 0.05, maxval = 10, step = 0.05, group = G_RISK)
+maxLev      = input.float(3.0, "Apalancamiento máximo (exposición / capital)", minval = 1, maxval = 5, step = 0.5, group = G_RISK)
+maxDayLoss  = input.float(3.0, "Pérdida máxima diaria (%)", minval = 0.1, maxval = 50, step = 0.1, group = G_RISK)
+maxTrades   = input.int(20, "Máximo de operaciones al día", minval = 1, group = G_RISK)
+qtyDecimals = input.int(1, "Decimales de la cantidad (HYPE: 1, comprueba el mínimo en BYDFi)", minval = 0, maxval = 8, group = G_RISK)
+
+minTpPct  = input.float(0.25, "Take profit mínimo (% del precio)", minval = 0, step = 0.01, group = G_FLT,
+     tooltip = "En lugar de bloquear cuando el mercado está tranquilo, amplía el TP (y el SL en la misma proporción) hasta este mínimo, para que cubra las comisiones. Con 0.018 % por lado, la ida y vuelta cuesta ~0.036 %.")
+minAtrPct = input.float(0.0, "ATR mínimo para operar (% del precio, 0 = no filtrar)", minval = 0, step = 0.01, group = G_FLT)
+showStats = input.bool(true, "Mostrar tabla de diagnóstico", group = G_FLT)
+sessionStr = input.session("0000-2400", "Sesión (UTC)", group = G_FLT)
+startDate  = input.time(timestamp("2024-01-01T00:00:00"), "Desde", group = G_FLT)
+endDate    = input.time(timestamp("2099-12-31T00:00:00"), "Hasta", group = G_FLT)
+
+relayMsg = input.text_area('{"secret":"CAMBIA_ESTE_SECRETO","symbol":"{{ticker}}","market_position":"{{strategy.market_position}}","position_size":"{{strategy.market_position_size}}","action":"{{strategy.order.action}}","contracts":"{{strategy.order.contracts}}","price":"{{close}}","order_id":"{{strategy.order.id}}","sl_dist":"%SLD%","tp_dist":"%TPD%"}', "Mensaje para todas las órdenes", group = G_ALR)
+
+// Se envían DISTANCIAS (no precios): el relay pone el SL/TP en BYDFi a esa distancia
+// del precio real de entrada, igual que hace aquí strategy.exit con loss/profit.
+f_msg(float slDist, float tpDist) =>
+    string m = str.replace_all(relayMsg, "%SLD%", na(slDist) ? "" : str.tostring(slDist, format.mintick))
+    str.replace_all(m, "%TPD%", na(tpDist) ? "" : str.tostring(tpDist, format.mintick))
+
+// ─────────────────────────── Indicadores ───────────────────────────
+trendEma = request.security(syminfo.tickerid, trendTf, ta.ema(close, trendLen)[1], lookahead = barmerge.lookahead_on)
+emaFast  = ta.ema(close, emaLen)
+emaMicro = ta.ema(close, emaMicroLen)
+rsi      = ta.rsi(close, rsiLen)
+atr      = ta.atr(atrLen)
+atrPct   = atr / close * 100
+
+upTrend = (not useTrend or (not na(trendEma) and close > trendEma)) and (not useSlope or emaFast > emaFast[1])
+dnTrend = (not useTrend or (not na(trendEma) and close < trendEma)) and (not useSlope or emaFast < emaFast[1])
+
+rsiLong   = ta.crossover(rsi, rsiLow)
+rsiShort  = ta.crossunder(rsi, rsiHigh)
+touchLong  = low <= emaFast and close > emaFast and close > open
+touchShort = high >= emaFast and close < emaFast and close < open
+crossLong  = ta.crossover(emaMicro, emaFast)
+crossShort = ta.crossunder(emaMicro, emaFast)
+
+bool longSig = switch entryMode
+    "Retroceso RSI"    => rsiLong
+    "Toque EMA rápida" => touchLong
+    "Cruce EMAs"       => crossLong
+    => rsiLong or touchLong or crossLong
+
+bool shortSig = switch entryMode
+    "Retroceso RSI"    => rsiShort
+    "Toque EMA rápida" => touchShort
+    "Cruce EMAs"       => crossShort
+    => rsiShort or touchShort or crossShort
+
+inDate = time >= startDate and time <= endDate
+inSess = not na(time(timeframe.period, sessionStr, "UTC"))
+volOk  = atrPct >= minAtrPct
+
+// ─────────────────────── Protecciones diarias ───────────────────────
+var float dayStartEq  = strategy.initial_capital
+var int   tradesToday = 0
+if timeframe.change("D")
+    dayStartEq  := strategy.equity
+    tradesToday := 0
+dayLossHit = strategy.equity <= dayStartEq * (1 - maxDayLoss / 100)
+
+canEnter = inDate and inSess and volOk and not dayLossHit and tradesToday < maxTrades and strategy.position_size == 0 and barstate.isconfirmed
+
+// ───────────────────────── Tamaño de posición ─────────────────────────
+f_qty(float dist) =>
+    // syminfo.pointvalue: en BYDFi vale 1; en contratos como SOL1! (B3) vale 5 y sin él el riesgo real se multiplica.
+    float maxQty  = strategy.equity * maxLev / (close * syminfo.pointvalue)
+    float riskQty = dist > 0 ? strategy.equity * riskPct / 100 / (dist * syminfo.pointvalue) : maxQty
+    float factor  = math.pow(10, qtyDecimals)
+    math.floor(math.min(riskQty, maxQty) * factor) / factor
+
+// ───────────────────────────── Órdenes ─────────────────────────────
+// SL/TP medidos desde el precio REAL de entrada (loss/profit en ticks), no desde el
+// cierre de la vela de señal. Antes la entrada se llenaba en la apertura siguiente y
+// el SL/TP quedaban descolocados (salidas en la misma vela, ganancia ≈ pérdida).
+var float slDist = na
+var float tpDist = na
+var int entryBar = na
+
+// TP mínimo: si el ATR es pequeño se amplían TP y SL en la misma proporción.
+float tpRaw   = atr * tpMult
+float minTp   = close * minTpPct / 100
+float scaleUp = tpRaw > 0 and tpRaw < minTp ? minTp / tpRaw : 1.0
+stopDist   = atr * slMult * scaleUp
+targetDist = tpRaw * scaleUp
+
+if canEnter and allowLong and upTrend and longSig
+    float q = f_qty(stopDist)
+    if q > 0
+        slDist := stopDist
+        tpDist := targetDist
+        entryBar := bar_index
+        tradesToday += 1
+        strategy.entry("Long", strategy.long, qty = q, alert_message = f_msg(slDist, tpDist))
+else if canEnter and allowShort and dnTrend and shortSig
+    float q = f_qty(stopDist)
+    if q > 0
+        slDist := stopDist
+        tpDist := targetDist
+        entryBar := bar_index
+        tradesToday += 1
+        strategy.entry("Short", strategy.short, qty = q, alert_message = f_msg(slDist, tpDist))
+
+slTicks = na(slDist) ? na : math.max(1, math.round(slDist / syminfo.mintick))
+tpTicks = na(tpDist) ? na : math.max(1, math.round(tpDist / syminfo.mintick))
+strategy.exit("Long TP/SL", from_entry = "Long", loss = slTicks, profit = tpTicks, alert_message = f_msg(na, na))
+strategy.exit("Short TP/SL", from_entry = "Short", loss = slTicks, profit = tpTicks, alert_message = f_msg(na, na))
+
+timeUp = maxBars > 0 and not na(entryBar) and bar_index - entryBar >= maxBars
+if strategy.position_size != 0 and barstate.isconfirmed and (timeUp or dayLossHit)
+    strategy.close_all(comment = dayLossHit ? "Límite diario" : "Tiempo", alert_message = f_msg(na, na))
+
+if strategy.position_size == 0 and not canEnter
+    entryBar := na
+
+// ───────────────────────────── Gráfico ─────────────────────────────
+plot(trendEma, "EMA tendencia", color = color.new(color.orange, 0), linewidth = 2)
+plot(emaFast, "EMA rápida", color = color.new(color.teal, 0))
+posDir = math.sign(strategy.position_size)
+plot(posDir != 0 ? strategy.position_avg_price - posDir * slDist : na, "Stop", color = color.new(color.red, 0), style = plot.style_linebr)
+plot(posDir != 0 ? strategy.position_avg_price + posDir * tpDist : na, "Objetivo", color = color.new(color.green, 0), style = plot.style_linebr)
+bgcolor(dayLossHit ? color.new(color.red, 85) : not volOk ? color.new(color.gray, 92) : na, title = "Bloqueos")
+
+// ─────────────────────── Diagnóstico de entradas ───────────────────────
+// Cuenta en cuántas velas hubo señal y qué filtro la bloqueó, para saber qué ajustar.
+var int nSig = 0
+var int nTrendBlk = 0
+var int nVolBlk = 0
+var int nDayBlk = 0
+var int nPosBlk = 0
+var int nEntries = 0
+var int nBars = 0
+if inDate
+    nBars += 1
+    bool anySig = (allowLong and longSig) or (allowShort and shortSig)
+    if anySig
+        nSig += 1
+        bool trendOk = (allowLong and longSig and upTrend) or (allowShort and shortSig and dnTrend)
+        if strategy.position_size != 0
+            nPosBlk += 1
+        else if not trendOk
+            nTrendBlk += 1
+        else if not volOk
+            nVolBlk += 1
+        else if dayLossHit or tradesToday >= maxTrades
+            nDayBlk += 1
+if strategy.position_size == 0 and canEnter and ((allowLong and upTrend and longSig) or (allowShort and dnTrend and shortSig))
+    nEntries += 1
+
+if showStats and barstate.islast
+    var table t = table.new(position.top_right, 2, 8, bgcolor = color.new(color.black, 20), border_width = 1)
+    float days = nBars * timeframe.in_seconds() / 86400.0
+    table.cell(t, 0, 0, "Velas analizadas", text_color = color.white)
+    table.cell(t, 1, 0, str.tostring(nBars), text_color = color.white)
+    table.cell(t, 0, 1, "Velas con señal", text_color = color.white)
+    table.cell(t, 1, 1, str.tostring(nSig), text_color = color.white)
+    table.cell(t, 0, 2, "Bloqueadas: ya en posición", text_color = color.white)
+    table.cell(t, 1, 2, str.tostring(nPosBlk), text_color = color.white)
+    table.cell(t, 0, 3, "Bloqueadas: tendencia", text_color = color.white)
+    table.cell(t, 1, 3, str.tostring(nTrendBlk), text_color = color.white)
+    table.cell(t, 0, 4, "Bloqueadas: ATR mínimo", text_color = color.white)
+    table.cell(t, 1, 4, str.tostring(nVolBlk), text_color = color.white)
+    table.cell(t, 0, 5, "Bloqueadas: límite diario", text_color = color.white)
+    table.cell(t, 1, 5, str.tostring(nDayBlk), text_color = color.white)
+    table.cell(t, 0, 6, "Entradas", text_color = color.yellow)
+    table.cell(t, 1, 6, str.tostring(nEntries), text_color = color.yellow)
+    table.cell(t, 0, 7, "Entradas por día", text_color = color.yellow)
+    table.cell(t, 1, 7, days > 0 ? str.tostring(nEntries / days, "#.##") : "-", text_color = color.yellow)

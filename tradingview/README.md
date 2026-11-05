@@ -161,6 +161,28 @@ más de la mitad de las veces, y antes de eso hay que comprobarlo en el Probador
 - Hay **liquidación** con apalancamiento y el backtest de TradingView no la simula. Mantén el apalancamiento bajo y el margen aislado.
 - Empieza con `DRY_RUN=true`, luego con el mínimo, y compara cada día el resultado real con el del Probador.
 
+## 5. Scalper de HYPE: `hype_scalper.pine`
+
+Usa la misma lógica que el scalper de BTC, con ajustes para un activo mucho más volátil. Gráfico: **`BYDFI:HYPEUSDT.P`** en 5 min.
+
+| Ajuste | BTC | HYPE | Motivo |
+|---|---|---|---|
+| TP mínimo | 0.10 % | **0.25 %** | HYPE se mueve más: objetivos más amplios y la comisión pesa menos |
+| Apalancamiento máximo | 5x | **3x** | Las mechas violentas pueden liquidar con apalancamiento alto |
+| Riesgo por operación | 0.5 % | **0.4 %** | Más deslizamiento real que en BTC |
+| Deslizamiento del backtest | 1 tick | **3 ticks** | Menos liquidez que BTC |
+| Máx. operaciones/día | 30 | 20 | Evita sobreoperar en días de mucho ruido |
+| Decimales de la cantidad | 3 | 1 | Compruébalo con el mínimo del contrato en BYDFi |
+
+Relay para HYPE (`.env`): `SYMBOL=HYPE/USDT:USDT`, `LEVERAGE=3`, `ALLOW_SHORT=true`, y `MAX_POSITION_BTC`
+pasa a ser el tope **en HYPE** (por ejemplo `20`). Si el relay no arranca con ese símbolo, BYDFi lo nombra
+de otra forma: el error del arranque lo dirá.
+
+Cuidado con HYPE:
+- Puede tener un **funding** alto en días de euforia. Revísalo en BYDFi si mantienes posiciones muchas horas.
+- Es una moneda con noticias propias (desbloqueos de tokens, Hyperliquid) que pueden moverla un 10–20 % en minutos. El SL puesto en el exchange es imprescindible.
+- Con pocos meses de histórico en BYDFi, valida con **cientos de operaciones** y mira si gana tanto en largos como en cortos.
+
 ## Advertencias
 
 - Los resultados pasados no garantizan los futuros. Esto no es asesoría financiera.
