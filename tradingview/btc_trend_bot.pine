@@ -35,7 +35,7 @@ const string G_SIG  = "1) Señal de entrada"
 const string G_REG  = "2) Filtro de régimen"
 const string G_RISK = "3) Riesgo y salidas"
 const string G_DIR  = "4) Dirección y fechas"
-const string G_ALR  = "5) Mensajes de alerta (webhook)"
+const string G_ALR  = "5) Mensajes de alerta (webhook BYDFi relay)"
 
 entryMode  = input.string("Supertrend", "Tipo de señal", options = ["Supertrend", "Cruce EMAs", "Ruptura Donchian"], group = G_SIG)
 stFactor   = input.float(3.0, "Supertrend: multiplicador", minval = 0.5, step = 0.1, group = G_SIG)
@@ -69,10 +69,13 @@ allowShort = input.bool(false, "Permitir cortos (solo futuros/margen)", group = 
 startDate  = input.time(timestamp("2018-01-01T00:00:00"), "Desde", group = G_DIR)
 endDate    = input.time(timestamp("2099-12-31T00:00:00"), "Hasta", group = G_DIR)
 
-msgLongEntry  = input.text_area('{"action":"buy","symbol":"{{ticker}}","qty":"{{strategy.order.contracts}}","price":"{{close}}","reason":"entry"}', "Mensaje: entrada en largo", group = G_ALR)
-msgLongExit   = input.text_area('{"action":"sell","symbol":"{{ticker}}","qty":"{{strategy.order.contracts}}","price":"{{close}}","reason":"exit"}', "Mensaje: salida de largo", group = G_ALR)
-msgShortEntry = input.text_area('{"action":"sell_short","symbol":"{{ticker}}","qty":"{{strategy.order.contracts}}","price":"{{close}}","reason":"entry"}', "Mensaje: entrada en corto", group = G_ALR)
-msgShortExit  = input.text_area('{"action":"buy_to_cover","symbol":"{{ticker}}","qty":"{{strategy.order.contracts}}","price":"{{close}}","reason":"exit"}', "Mensaje: salida de corto", group = G_ALR)
+// Formato del relay de BYDFi (tradingview/relay). Cambia CAMBIA_ESTE_SECRETO por tu WEBHOOK_SECRET.
+// El relay solo necesita market_position y position_size (posición objetivo DESPUÉS de la orden).
+const string RELAY_MSG = '{"secret":"CAMBIA_ESTE_SECRETO","symbol":"{{ticker}}","market_position":"{{strategy.market_position}}","position_size":"{{strategy.market_position_size}}","action":"{{strategy.order.action}}","contracts":"{{strategy.order.contracts}}","price":"{{close}}","order_id":"{{strategy.order.id}}"}'
+msgLongEntry  = input.text_area(RELAY_MSG, "Mensaje: entrada en largo", group = G_ALR)
+msgLongExit   = input.text_area(RELAY_MSG, "Mensaje: salida de largo", group = G_ALR)
+msgShortEntry = input.text_area(RELAY_MSG, "Mensaje: entrada en corto", group = G_ALR)
+msgShortExit  = input.text_area(RELAY_MSG, "Mensaje: salida de corto", group = G_ALR)
 
 // ─────────────────────────── Indicadores ───────────────────────────
 inDate = time >= startDate and time <= endDate

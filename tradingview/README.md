@@ -24,8 +24,8 @@ fuera en mercados bajistas y cortar las pérdidas pronto.
 
 ## 1. Cargarlo en TradingView
 
-1. Abre un gráfico de **BTCUSDT** del exchange donde vayas a operar (por ejemplo `BINANCE:BTCUSDT`,
-   `OKX:BTCUSDT` o `BITGET:BTCUSDT`). Usa el mismo par que vas a operar de verdad.
+1. Abre un gráfico de **BTCUSDT** del exchange donde vayas a operar (con BYDFi: `BYDFI:BTCUSDT.P`; en otros exchanges, por ejemplo `BINANCE:BTCUSDT`).
+   Usa el mismo par que vas a operar de verdad.
 2. Temporalidad recomendada: **4 h** (también puedes probar 1 D).
 3. Abre el **Editor de Pine**, pega el contenido de `btc_trend_bot.pine`, haz clic en **Guardar** y luego en **Añadir al gráfico**.
 4. Abre el **Probador de estrategias** y revisa: beneficio neto, drawdown máximo,
@@ -46,37 +46,68 @@ Cómo elegir sin engañarte:
 - Si una configuración solo funciona con un valor exacto (por ejemplo, funciona con 3.5 y falla con 3.0 y 4.0), está **sobreajustada**: descártala.
 - Haz una validación fuera de muestra: optimiza con `Desde/Hasta` = 2018–2023 y comprueba sin tocar nada el periodo 2024–hoy.
 
-## 3. Conectarlo a un exchange (automatizarlo)
+## 3. Conectarlo a BYDFi (automatizarlo)
 
-TradingView **no ejecuta estrategias por sí solo** en tu cuenta. El panel de trading de
-TradingView sirve para operar a mano. Para automatizar, cada orden de la estrategia
-dispara una **alerta con webhook** que recibe el bot de señales de tu exchange.
+TradingView **no ejecuta la estrategia por sí solo** en tu cuenta. Cada orden de la estrategia
+dispara una **alerta con webhook**, y alguien tiene que recibirla y enviar la orden al exchange.
 
-Requisitos: un plan de TradingView con webhooks (Essential o superior) y la verificación en dos pasos activada.
+BYDFi no tiene un bot de señales que reciba los webhooks de TradingView (a diferencia de OKX o Bybit).
+Por eso se incluye un **servidor puente** propio en `relay/`. Recibe la alerta y opera en BYDFi por API.
 
-Opciones habituales:
-- **Bots de señales del propio exchange** que aceptan webhooks de TradingView (OKX Signal Bot, Bitget y otros).
-- **Intermediarios** como 3Commas, WunderTrading o similares, conectados a tu exchange por API.
+```
+TradingView (estrategia) ──webhook──▶ relay/bydfi_relay.py (tu servidor) ──API──▶ BYDFi
+```
 
-Pasos:
+### Puntos importantes de BYDFi
 
-1. En tu exchange o intermediario, crea un bot de señales de TradingView para BTCUSDT spot. Te dará una
-   **URL de webhook** y una **plantilla de mensaje** (JSON), normalmente con un token secreto.
-2. En la configuración de la estrategia (sección *5) Mensajes de alerta*) pega esa plantilla en los
-   campos de entrada y salida. Puedes usar variables de TradingView como `{{ticker}}`, `{{close}}`,
-   `{{strategy.order.contracts}}` o `{{strategy.order.action}}`.
-3. En el gráfico: **Alertas → Crear alerta**.
+- La API de BYDFi (y la librería CCXT que usa el relay) trabaja con **futuros perpetuos** USDT-M, no con spot.
+  El relay opera `BTC/USDT:USDT` con **apalancamiento 1x, margen aislado y solo largos**, lo que se parece
+  mucho a tener BTC en spot. La diferencia es que se paga o se cobra **funding** cada pocas horas.
+- Usa el gráfico de BYDFi en TradingView: **`BYDFI:BTCUSDT.P`**, en 4 h. Así las señales salen con los mismos precios con los que vas a operar.
+- En **Propiedades** de la estrategia, pon el **capital inicial** igual al dinero que vas a dedicar al bot.
+  El relay copia la cantidad de BTC que calcula la estrategia, limitada por `MAX_POSITION_BTC`.
+
+### Cómo funciona el relay
+
+Cada alerta envía la posición que la estrategia **debe tener** después de la orden
+(`{{strategy.market_position}}` y `{{strategy.market_position_size}}`). El relay la compara con tu
+posición real en BYDFi y envía solo la diferencia como orden de mercado (las salidas van con `reduceOnly`).
+Si una alerta llega dos veces, no pasa nada. Si se pierde una, la siguiente vuelve a sincronizar la cuenta.
+
+Protecciones:
+- Comprueba un secreto (`WEBHOOK_SECRET`) en cada alerta.
+- Aplica un tope de tamaño (`MAX_POSITION_BTC`).
+- Bloquea los cortos salvo que actives `ALLOW_SHORT`.
+- Arranca en `DRY_RUN=true`, que solo registra lo que haría y no envía órdenes.
+- Guarda un registro en `relay.log`.
+
+### Pasos
+
+1. **API key en BYDFi:** Perfil → Gestión de API → crear clave con permiso de **trading de perpetuos**.
+   Nunca actives el permiso de **transferencia ni de retiro**. Vincúlala a la IP de tu servidor.
+2. **Servidor:** un VPS pequeño con IP fija (TradingView solo envía webhooks a los puertos 80/443 y por HTTPS).
+   ```bash
+   cd tradingview/relay
+   python3 -m venv venv && ./venv/bin/pip install -r requirements.txt
+   cp .env.example .env    # rellena las claves y un WEBHOOK_SECRET largo
+   set -a && . ./.env && set +a
+   ./venv/bin/python -m unittest test_bydfi_relay   # tests locales
+   ./venv/bin/python bydfi_relay.py                 # escucha en el puerto 8080
+   ```
+   Pon delante un proxy con HTTPS, por ejemplo Caddy con `tudominio.com { reverse_proxy localhost:8080 }`,
+   y déjalo funcionando como servicio (systemd) para que se reinicie solo.
+   Comprueba que responde en `https://tudominio.com/health`.
+3. **Estrategia:** en *5) Mensajes de alerta*, cambia `CAMBIA_ESTE_SECRETO` por tu `WEBHOOK_SECRET` en los 4 campos.
+4. **Alerta:** Alertas → Crear alerta.
    - Condición: `BTC Trend Bot (Zynthor)` → *Solo ejecuciones de órdenes* (*Order fills only*).
-   - Mensaje: escribe exactamente `{{strategy.order.alert_message}}`
-   - Notificaciones: activa **Webhook URL** y pega la URL del exchange.
-   - Caducidad: *abierta* (sin fecha de fin).
-4. Prueba primero con **cuenta demo o un importe muy pequeño** y comprueba que cada señal llega bien.
+   - Mensaje: exactamente `{{strategy.order.alert_message}}`
+   - Notificaciones: **Webhook URL** = `https://tudominio.com/webhook`
+   - Caducidad: abierta.
+   Necesitas un plan de TradingView con webhooks (Essential o superior) y la verificación en dos pasos activada.
+5. **Prueba en seco:** deja `DRY_RUN=true` unos días y comprueba en `relay.log` que cada señal llega con el tamaño correcto.
+6. **En real:** pon `DRY_RUN=false` con un `MAX_POSITION_BTC` pequeño y sube el tope poco a poco.
 
-Importante:
-- Si cambias cualquier parámetro de la estrategia, **borra y vuelve a crear la alerta**. La alerta guarda la configuración del momento en que se creó.
-- Usa la **misma temporalidad y el mismo par** en el gráfico que en el bot del exchange.
-- La API key del exchange debe tener solo permiso de **trading**, nunca de retiro.
-- Si quieres que el exchange gestione el tamaño (por ejemplo, un % fijo del saldo), configura eso en el bot y no envíes la cantidad en el mensaje.
+Si cambias cualquier parámetro de la estrategia, **borra y vuelve a crear la alerta**. La alerta guarda la configuración del momento en que se creó.
 
 ## Advertencias
 
