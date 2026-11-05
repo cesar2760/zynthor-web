@@ -67,7 +67,7 @@ riskPct     = input.float(0.5, "Riesgo por operación (% del capital)", minval =
 maxLev      = input.float(5.0, "Apalancamiento máximo (exposición / capital)", minval = 1, maxval = 10, step = 0.5, group = G_RISK)
 maxDayLoss  = input.float(3.0, "Pérdida máxima diaria (%)", minval = 0.1, maxval = 50, step = 0.1, group = G_RISK)
 maxTrades   = input.int(30, "Máximo de operaciones al día", minval = 1, group = G_RISK)
-qtyDecimals = input.int(3, "Decimales de la cantidad (BTC)", minval = 0, maxval = 8, group = G_RISK)
+qtyDecimals = input.int(3, "Decimales de la cantidad (BTC: 3, SOL: 1)", minval = 0, maxval = 8, group = G_RISK)
 
 minTpPct  = input.float(0.10, "Take profit mínimo (% del precio)", minval = 0, step = 0.01, group = G_FLT,
      tooltip = "En lugar de bloquear cuando el mercado está tranquilo, amplía el TP (y el SL en la misma proporción) hasta este mínimo, para que cubra las comisiones. Con 0.018 % por lado, la ida y vuelta cuesta ~0.036 %.")
@@ -131,8 +131,9 @@ canEnter = inDate and inSess and volOk and not dayLossHit and tradesToday < maxT
 
 // ───────────────────────── Tamaño de posición ─────────────────────────
 f_qty(float dist) =>
-    float maxQty  = strategy.equity * maxLev / close
-    float riskQty = dist > 0 ? strategy.equity * riskPct / 100 / dist : maxQty
+    // syminfo.pointvalue: en BYDFi vale 1; en contratos como SOL1! (B3) vale 5 y sin él el riesgo real se multiplica.
+    float maxQty  = strategy.equity * maxLev / (close * syminfo.pointvalue)
+    float riskQty = dist > 0 ? strategy.equity * riskPct / 100 / (dist * syminfo.pointvalue) : maxQty
     float factor  = math.pow(10, qtyDecimals)
     math.floor(math.min(riskQty, maxQty) * factor) / factor
 
