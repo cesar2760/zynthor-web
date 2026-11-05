@@ -1,0 +1,346 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0
+// https://mozilla.org/MPL/2.0/
+//
+// VWAP + Soportes/Resistencias (Zynthor) - futuros BYDFi (HYPE, BTC, SOL...), 5 o 15 min
+// ------------------------------------------------------------------------------
+// 1. Sesgo con el VWAP (anclado al día, a la sesión de Nueva York o a la semana):
+//      precio sobre el VWAP y VWAP subiendo  -> MANDAN LOS COMPRADORES (solo compras)
+//      precio bajo el VWAP y VWAP bajando    -> MANDAN LOS VENDEDORES  (solo ventas)
+// 2. Niveles de soporte y resistencia: pivotes confirmados (sin repintado), unidos
+//    cuando están muy cerca, + máximo y mínimo del día anterior + VWAP y sus bandas.
+// 3. Entradas (se pueden activar por separado):
+//      - Rechazo en el VWAP a favor del sesgo
+//      - Rebote en soporte (compras) o en resistencia (ventas)
+//      - Ruptura de un nivel a favor del sesgo (apagada por defecto)
+// 4. Objetivo = el siguiente nivel (con un máximo por ATR). Si el siguiente nivel está
+//    demasiado cerca para compensar el riesgo y las comisiones, NO entra.
+// 5. Stop al otro lado del nivel tocado + margen de ATR. Salida por tiempo opcional.
+// 6. Riesgo por operación, apalancamiento máximo, pérdida diaria máxima y máximo de
+//    operaciones al día. Mensajes para el relay de BYDFi (tradingview/relay).
+//
+// AVISO: no es asesoría financiera. Prueba con DRY_RUN y luego con importes mínimos.
+// ------------------------------------------------------------------------------
+//@version=6
+strategy("VWAP + S/R (Zynthor)", shorttitle = "VWAP S/R", overlay = true,
+     max_lines_count         = 100,
+     max_labels_count        = 100,
+     initial_capital         = 1000,
+     default_qty_type        = strategy.percent_of_equity,
+     default_qty_value       = 100,
+     commission_type         = strategy.commission.percent,
+     commission_value        = 0.018,
+     slippage                = 2,
+     pyramiding              = 0,
+     margin_long             = 20,
+     margin_short            = 20,
+     calc_on_every_tick      = false,
+     process_orders_on_close = false)
+
+// ───────────────────────────── Inputs ─────────────────────────────
+const string G_VW   = "1) VWAP y sesgo"
+const string G_SR   = "2) Soportes y resistencias"
+const string G_SIG  = "3) Entradas"
+const string G_EXIT = "4) Stop y objetivo"
+const string G_RISK = "5) Riesgo"
+const string G_FLT  = "6) Fechas y visual"
+const string G_ALR  = "7) Mensaje de alerta (relay BYDFi)"
+
+anchorMode = input.string("Sesión Nueva York", "Anclaje del VWAP", options = ["Sesión Nueva York", "Diario (UTC)", "Semanal"], group = G_VW)
+nySession  = input.session("0930-1600", "Sesión NY (hora de Nueva York)", group = G_VW)
+bandMult   = input.float(1.0, "Bandas del VWAP (desviaciones)", minval = 0.1, step = 0.1, group = G_VW)
+slopeLen   = input.int(5, "Velas para medir la pendiente del VWAP", minval = 1, group = G_VW)
+requireBias = input.bool(true, "Operar solo a favor del sesgo del VWAP", group = G_VW)
+
+pivLeft    = input.int(10, "Pivote: velas a la izquierda", minval = 1, group = G_SR)
+pivRight   = input.int(5, "Pivote: velas a la derecha (confirmación)", minval = 1, group = G_SR)
+maxLevels  = input.int(12, "Máximo de niveles guardados", minval = 2, maxval = 50, group = G_SR)
+zoneAtr    = input.float(0.3, "Ancho de zona del nivel = ATR ×", minval = 0.05, step = 0.05, group = G_SR)
+usePrevDay = input.bool(true, "Incluir máximo y mínimo del día anterior", group = G_SR)
+useBands   = input.bool(true, "Usar bandas del VWAP como niveles", group = G_SR)
+
+useVwapRej = input.bool(true, "Entrada: rechazo en el VWAP", group = G_SIG)
+useBounce  = input.bool(true, "Entrada: rebote en soporte / resistencia", group = G_SIG)
+useBreak   = input.bool(false, "Entrada: ruptura de nivel", group = G_SIG)
+allowLong  = input.bool(true, "Permitir compras", group = G_SIG)
+allowShort = input.bool(true, "Permitir ventas", group = G_SIG)
+
+atrLen    = input.int(14, "ATR: periodo", minval = 1, group = G_EXIT)
+slBufAtr  = input.float(0.3, "Stop: margen detrás del nivel = ATR ×", minval = 0, step = 0.05, group = G_EXIT)
+minSlAtr  = input.float(0.6, "Stop mínimo = ATR ×", minval = 0.1, step = 0.1, group = G_EXIT)
+tpMaxAtr  = input.float(3.0, "Objetivo máximo = ATR ×", minval = 0.5, step = 0.1, group = G_EXIT)
+minRR     = input.float(1.2, "Relación beneficio/riesgo mínima", minval = 0.5, step = 0.1, group = G_EXIT,
+     tooltip = "Si el siguiente nivel está tan cerca que el objetivo es menor que el stop × este valor, no entra ('el próximo nivel está muy cerca').")
+minTpPct  = input.float(0.15, "Objetivo mínimo (% del precio)", minval = 0, step = 0.01, group = G_EXIT,
+     tooltip = "Para que el objetivo cubra las comisiones. Con 0.018 % por lado, la ida y vuelta cuesta ~0.036 %.")
+maxBars   = input.int(24, "Salida por tiempo (velas, 0 = no)", minval = 0, group = G_EXIT)
+
+riskPct     = input.float(0.5, "Riesgo por operación (% del capital)", minval = 0.05, maxval = 10, step = 0.05, group = G_RISK)
+maxLev      = input.float(3.0, "Apalancamiento máximo (exposición / capital)", minval = 1, maxval = 5, step = 0.5, group = G_RISK)
+maxDayLoss  = input.float(3.0, "Pérdida máxima diaria (%)", minval = 0.1, maxval = 50, step = 0.1, group = G_RISK)
+maxTrades   = input.int(15, "Máximo de operaciones al día", minval = 1, group = G_RISK)
+qtyDecimals = input.int(1, "Decimales de la cantidad (HYPE/SOL: 1, BTC: 3)", minval = 0, maxval = 8, group = G_RISK)
+
+startDate  = input.time(timestamp("2024-01-01T00:00:00"), "Desde", group = G_FLT)
+endDate    = input.time(timestamp("2099-12-31T00:00:00"), "Hasta", group = G_FLT)
+showLevels = input.bool(true, "Dibujar soportes y resistencias", group = G_FLT)
+showPanel  = input.bool(true, "Mostrar panel de sesgo y diagnóstico", group = G_FLT)
+
+relayMsg = input.text_area('{"secret":"CAMBIA_ESTE_SECRETO","symbol":"{{ticker}}","market_position":"{{strategy.market_position}}","position_size":"{{strategy.market_position_size}}","action":"{{strategy.order.action}}","contracts":"{{strategy.order.contracts}}","price":"{{close}}","order_id":"{{strategy.order.id}}","sl_dist":"%SLD%","tp_dist":"%TPD%"}', "Mensaje para todas las órdenes", group = G_ALR)
+
+f_msg(float slD, float tpD) =>
+    string m = str.replace_all(relayMsg, "%SLD%", na(slD) ? "" : str.tostring(slD, format.mintick))
+    str.replace_all(m, "%TPD%", na(tpD) ? "" : str.tostring(tpD, format.mintick))
+
+// ─────────────────────────────── VWAP ───────────────────────────────
+nyBar   = not na(time(timeframe.period, nySession, "America/New_York"))
+nyStart = nyBar and not nyBar[1]
+bool anchorChange = switch anchorMode
+    "Sesión Nueva York" => nyStart
+    "Semanal"           => timeframe.change("W")
+    => timeframe.change("D")
+
+[vwLine, vwUp, vwDn] = ta.vwap(hlc3, anchorChange, bandMult)
+atr  = ta.atr(atrLen)
+zone = atr * zoneAtr
+
+buyersRule  = close > vwLine and vwLine > vwLine[slopeLen]
+sellersRule = close < vwLine and vwLine < vwLine[slopeLen]
+
+// ─────────────────────── Soportes y resistencias ───────────────────────
+var array<float> levels = array.new<float>()
+
+f_addLevel(array<float> lv, float lvl, float z, int maxN) =>
+    bool merged = false
+    int n = array.size(lv)
+    if n > 0
+        for i = 0 to n - 1
+            float cur = array.get(lv, i)
+            if math.abs(cur - lvl) <= z
+                array.set(lv, i, (cur + lvl) / 2)
+                merged := true
+                break
+    if not merged
+        array.push(lv, lvl)
+        if array.size(lv) > maxN
+            array.shift(lv)
+    merged
+
+ph = ta.pivothigh(high, pivLeft, pivRight)
+pl = ta.pivotlow(low, pivLeft, pivRight)
+if not na(ph)
+    f_addLevel(levels, ph, zone, maxLevels)
+if not na(pl)
+    f_addLevel(levels, pl, zone, maxLevels)
+
+pdh = request.security(syminfo.tickerid, "D", high[1], lookahead = barmerge.lookahead_on)
+pdl = request.security(syminfo.tickerid, "D", low[1], lookahead = barmerge.lookahead_on)
+
+// Todos los niveles candidatos de esta vela.
+cands = array.copy(levels)
+if usePrevDay and not na(pdh)
+    array.push(cands, pdh)
+if usePrevDay and not na(pdl)
+    array.push(cands, pdl)
+if not na(vwLine)
+    array.push(cands, vwLine)
+if useBands and not na(vwUp)
+    array.push(cands, vwUp)
+if useBands and not na(vwDn)
+    array.push(cands, vwDn)
+
+// Nivel más cercano por encima / por debajo de un precio (ignorando los que están dentro de la zona).
+f_above(array<float> lv, float px, float z) =>
+    float best = na
+    for l in lv
+        if l > px + z and (na(best) or l < best)
+            best := l
+    best
+
+f_below(array<float> lv, float px, float z) =>
+    float best = na
+    for l in lv
+        if l < px - z and (na(best) or l > best)
+            best := l
+    best
+
+// Soporte tocado en esta vela: la mecha entra en la zona y el cierre queda por encima.
+f_supportTouched(array<float> lv, float z) =>
+    float best = na
+    for l in lv
+        if low <= l + z and close > l and (na(best) or l > best)
+            best := l
+    best
+
+f_resistanceTouched(array<float> lv, float z) =>
+    float best = na
+    for l in lv
+        if high >= l - z and close < l and (na(best) or l < best)
+            best := l
+    best
+
+// Nivel roto en esta vela (cierre al otro lado, cierre anterior no).
+f_brokenUp(array<float> lv) =>
+    float best = na
+    for l in lv
+        if close > l and close[1] <= l and (na(best) or l > best)
+            best := l
+    best
+
+f_brokenDown(array<float> lv) =>
+    float best = na
+    for l in lv
+        if close < l and close[1] >= l and (na(best) or l < best)
+            best := l
+    best
+
+supLvl = f_supportTouched(cands, zone)
+resLvl = f_resistanceTouched(cands, zone)
+brkUp  = f_brokenUp(levels)
+brkDn  = f_brokenDown(levels)
+
+// ─────────────────────────────── Señales ───────────────────────────────
+vwapLong  = useVwapRej and low <= vwLine + zone and close > vwLine and close > open
+vwapShort = useVwapRej and high >= vwLine - zone and close < vwLine and close < open
+bncLong   = useBounce and not na(supLvl) and close > open
+bncShort  = useBounce and not na(resLvl) and close < open
+brkLong   = useBreak and not na(brkUp) and close > open
+brkShort  = useBreak and not na(brkDn) and close < open
+
+rawLong  = allowLong and (vwapLong or bncLong or brkLong)
+rawShort = allowShort and (vwapShort or bncShort or brkShort)
+biasLongOk  = not requireBias or buyersRule
+biasShortOk = not requireBias or sellersRule
+
+// Nivel de referencia para el stop (el que se ha tocado o roto).
+float refLong = bncLong ? supLvl : vwapLong ? vwLine : brkUp
+float refShort = bncShort ? resLvl : vwapShort ? vwLine : brkDn
+
+// Stop y objetivo en distancia.
+float slL = na(refLong) ? na : math.max(close - (math.min(low, refLong) - atr * slBufAtr), atr * minSlAtr)
+float slS = na(refShort) ? na : math.max((math.max(high, refShort) + atr * slBufAtr) - close, atr * minSlAtr)
+nextUp = f_above(cands, close, zone)
+nextDn = f_below(cands, close, zone)
+float tpL = math.min(na(nextUp) ? atr * tpMaxAtr : nextUp - close - atr * 0.1, atr * tpMaxAtr)
+float tpS = math.min(na(nextDn) ? atr * tpMaxAtr : close - nextDn - atr * 0.1, atr * tpMaxAtr)
+minTp = close * minTpPct / 100
+roomLong  = not na(slL) and tpL >= slL * minRR and tpL >= minTp
+roomShort = not na(slS) and tpS >= slS * minRR and tpS >= minTp
+
+// ─────────────────────── Protecciones diarias ───────────────────────
+inDate = time >= startDate and time <= endDate
+var float dayStartEq  = strategy.initial_capital
+var int   tradesToday = 0
+if timeframe.change("D")
+    dayStartEq  := strategy.equity
+    tradesToday := 0
+dayLossHit = strategy.equity <= dayStartEq * (1 - maxDayLoss / 100)
+canEnter = inDate and not dayLossHit and tradesToday < maxTrades and strategy.position_size == 0 and barstate.isconfirmed
+
+goLong  = canEnter and rawLong and biasLongOk and roomLong
+goShort = canEnter and rawShort and biasShortOk and roomShort and not goLong
+
+// ───────────────────────── Tamaño de posición ─────────────────────────
+f_qty(float dist) =>
+    float maxQty  = strategy.equity * maxLev / (close * syminfo.pointvalue)
+    float riskQty = dist > 0 ? strategy.equity * riskPct / 100 / (dist * syminfo.pointvalue) : maxQty
+    float factor  = math.pow(10, qtyDecimals)
+    math.floor(math.min(riskQty, maxQty) * factor) / factor
+
+// ───────────────────────────── Órdenes ─────────────────────────────
+var float slDist = na
+var float tpDist = na
+var int entryBar = na
+
+if goLong
+    float q = f_qty(slL)
+    if q > 0
+        slDist := slL
+        tpDist := tpL
+        entryBar := bar_index
+        tradesToday += 1
+        strategy.entry("Long", strategy.long, qty = q, alert_message = f_msg(slDist, tpDist))
+else if goShort
+    float q = f_qty(slS)
+    if q > 0
+        slDist := slS
+        tpDist := tpS
+        entryBar := bar_index
+        tradesToday += 1
+        strategy.entry("Short", strategy.short, qty = q, alert_message = f_msg(slDist, tpDist))
+
+slTicks = na(slDist) ? na : math.max(1, math.round(slDist / syminfo.mintick))
+tpTicks = na(tpDist) ? na : math.max(1, math.round(tpDist / syminfo.mintick))
+strategy.exit("Long TP/SL", from_entry = "Long", loss = slTicks, profit = tpTicks, alert_message = f_msg(na, na))
+strategy.exit("Short TP/SL", from_entry = "Short", loss = slTicks, profit = tpTicks, alert_message = f_msg(na, na))
+
+timeUp = maxBars > 0 and not na(entryBar) and bar_index - entryBar >= maxBars
+if strategy.position_size != 0 and barstate.isconfirmed and (timeUp or dayLossHit)
+    strategy.close_all(comment = dayLossHit ? "Límite diario" : "Tiempo", alert_message = f_msg(na, na))
+
+// ─────────────────────── Diagnóstico ───────────────────────
+var int nSig = 0
+var int nBiasBlk = 0
+var int nRoomBlk = 0
+var int nPosBlk = 0
+var int nDayBlk = 0
+var int nEntries = 0
+var int nBars = 0
+if inDate and barstate.isconfirmed
+    nBars += 1
+    if rawLong or rawShort
+        nSig += 1
+        bool biasOk = (rawLong and biasLongOk) or (rawShort and biasShortOk)
+        bool roomOk = (rawLong and biasLongOk and roomLong) or (rawShort and biasShortOk and roomShort)
+        if strategy.position_size != 0
+            nPosBlk += 1
+        else if not biasOk
+            nBiasBlk += 1
+        else if not roomOk
+            nRoomBlk += 1
+        else if dayLossHit or tradesToday >= maxTrades
+            nDayBlk += 1
+if goLong or goShort
+    nEntries += 1
+
+// ───────────────────────────── Gráfico ─────────────────────────────
+plot(vwLine, "VWAP", color = color.new(color.aqua, 0), linewidth = 2)
+plot(useBands ? vwUp : na, "Banda superior", color = color.new(color.yellow, 30))
+plot(useBands ? vwDn : na, "Banda inferior", color = color.new(color.yellow, 30))
+plot(usePrevDay ? pdh : na, "Máximo día anterior", color = color.new(color.red, 50), style = plot.style_stepline)
+plot(usePrevDay ? pdl : na, "Mínimo día anterior", color = color.new(color.green, 50), style = plot.style_stepline)
+plotshape(goLong, "Compra", shape.triangleup, location.belowbar, color.new(color.lime, 0), size = size.small)
+plotshape(goShort, "Venta", shape.triangledown, location.abovebar, color.new(color.red, 0), size = size.small)
+posDir = math.sign(strategy.position_size)
+plot(posDir != 0 ? strategy.position_avg_price - posDir * slDist : na, "Stop", color = color.new(color.red, 0), style = plot.style_linebr)
+plot(posDir != 0 ? strategy.position_avg_price + posDir * tpDist : na, "Objetivo", color = color.new(color.lime, 0), style = plot.style_linebr)
+
+var array<line> drawn = array.new<line>()
+if showLevels and barstate.islast
+    for ln in drawn
+        line.delete(ln)
+    array.clear(drawn)
+    for l in levels
+        color c = l > close ? color.new(color.red, 20) : color.new(color.green, 20)
+        array.push(drawn, line.new(bar_index - 150, l, bar_index + 10, l, color = c, width = 1, style = line.style_dashed))
+
+if showPanel and barstate.islast
+    var table t = table.new(position.top_right, 2, 8, bgcolor = color.new(color.black, 15), border_width = 1)
+    string biasTxt = buyersRule ? "MANDAN LOS COMPRADORES: solo compras" : sellersRule ? "MANDAN LOS VENDEDORES: solo ventas" : "NEUTRAL: esperar"
+    color biasCol = buyersRule ? color.new(color.green, 0) : sellersRule ? color.new(color.red, 0) : color.new(color.gray, 0)
+    float days = nBars * timeframe.in_seconds() / 86400.0
+    table.cell(t, 0, 0, biasTxt, text_color = color.white, bgcolor = biasCol)
+    table.merge_cells(t, 0, 0, 1, 0)
+    table.cell(t, 0, 1, "Velas con señal", text_color = color.white)
+    table.cell(t, 1, 1, str.tostring(nSig), text_color = color.white)
+    table.cell(t, 0, 2, "Bloqueadas: ya en posición", text_color = color.white)
+    table.cell(t, 1, 2, str.tostring(nPosBlk), text_color = color.white)
+    table.cell(t, 0, 3, "Bloqueadas: contra el sesgo", text_color = color.white)
+    table.cell(t, 1, 3, str.tostring(nBiasBlk), text_color = color.white)
+    table.cell(t, 0, 4, "Bloqueadas: nivel muy cerca", text_color = color.white)
+    table.cell(t, 1, 4, str.tostring(nRoomBlk), text_color = color.white)
+    table.cell(t, 0, 5, "Bloqueadas: límite diario", text_color = color.white)
+    table.cell(t, 1, 5, str.tostring(nDayBlk), text_color = color.white)
+    table.cell(t, 0, 6, "Entradas", text_color = color.yellow)
+    table.cell(t, 1, 6, str.tostring(nEntries), text_color = color.yellow)
+    table.cell(t, 0, 7, "Entradas por día", text_color = color.yellow)
+    table.cell(t, 1, 7, days > 0 ? str.tostring(nEntries / days, "#.##") : "-", text_color = color.yellow)

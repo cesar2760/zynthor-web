@@ -183,6 +183,31 @@ Cuidado con HYPE:
 - Es una moneda con noticias propias (desbloqueos de tokens, Hyperliquid) que pueden moverla un 10–20 % en minutos. El SL puesto en el exchange es imprescindible.
 - Con pocos meses de histórico en BYDFi, valida con **cientos de operaciones** y mira si gana tanto en largos como en cortos.
 
+## 6. Sistema VWAP + soportes y resistencias: `vwap_sr_bot.pine`
+
+Sirve para HYPE, BTC o SOL en BYDFi, en 5 o 15 min. Usa el mismo relay que los scalpers.
+
+**Cómo decide:**
+1. **Sesgo con el VWAP** (anclado a la sesión de Nueva York por defecto; también diario o semanal):
+   - Precio sobre el VWAP y VWAP subiendo → **mandan los compradores**: solo compras.
+   - Precio bajo el VWAP y VWAP bajando → **mandan los vendedores**: solo ventas.
+   - En cualquier otro caso → neutral, no opera.
+2. **Soportes y resistencias:** pivotes confirmados (no repintan), que se unen si están muy cerca;
+   máximo y mínimo del día anterior; el VWAP y sus bandas. Se dibujan en el gráfico (verde = soporte, rojo = resistencia).
+3. **Entradas:** rechazo en el VWAP, rebote en soporte o resistencia, y ruptura de nivel (esta última apagada por defecto).
+4. **Objetivo = el siguiente nivel** (con un máximo de 3 × ATR). Si ese nivel está tan cerca que no compensa el
+   riesgo (relación < 1.2) o no cubre la comisión (objetivo < 0.15 %), **no entra**.
+5. **Stop** detrás del nivel tocado + 0.3 × ATR. Cierre a las 24 velas si no ha tocado ni stop ni objetivo.
+6. Riesgo 0.5 % por operación, máximo 3x, pérdida diaria máxima 3 %, máximo 15 operaciones al día.
+
+El panel de arriba a la derecha muestra el sesgo actual y cuántas señales bloqueó cada filtro
+(contra el sesgo, nivel muy cerca, ya en posición, límite diario). Si hay pocas entradas, la tabla dice por qué.
+
+Ajustes que más cambian el número de entradas:
+- `Operar solo a favor del sesgo del VWAP`: apagado → muchas más entradas, pero también contra la tendencia.
+- `Relación beneficio/riesgo mínima`: 1.0 en lugar de 1.2 → menos bloqueos por "nivel muy cerca".
+- `Pivote: velas a la izquierda/derecha`: valores más pequeños (5/3) → más niveles y más rebotes.
+
 ## Advertencias
 
 - Los resultados pasados no garantizan los futuros. Esto no es asesoría financiera.
