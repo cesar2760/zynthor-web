@@ -116,9 +116,10 @@ Es una estrategia aparte, pensada para hacer **muchas operaciones** en `BYDFI:BT
 | Pieza | Por defecto |
 |---|---|
 | Tendencia | Precio sobre/bajo la EMA 200 de **15 min** (pendiente de la EMA 21 opcional) |
-| Entrada | RSI(7) vuelve a subir por encima de 40 (largos) o a bajar por debajo de 60 (cortos), o toque a la EMA 21 |
+| Entrada | **Todas**: cualquiera de estas señales vale: RSI(7) cruza 40/60, toque a la EMA 21 o cruce EMA 9/21 |
 | Salidas | TP 1.5 × ATR, SL 1.0 × ATR **medidos desde el precio real de entrada**, cierre a las 12 velas |
-| Filtro | Solo opera si el ATR es ≥ 0.08 % del precio (si no, las comisiones se comen el objetivo) |
+| TP mínimo | 0.10 %: si el mercado está tranquilo se amplían TP y SL en vez de no operar |
+| Diagnóstico | Tabla en el gráfico: señales, qué filtro las bloquea y entradas por día |
 | Riesgo | 0.5 % del capital por operación, máximo 5x de exposición |
 | Protecciones | Para el día al perder un 3 %, máximo 30 operaciones al día |
 | Comisión del backtest | 0.018 % por lado (0.06 % taker × 30 % que pagas tras el reembolso del 70 %) |

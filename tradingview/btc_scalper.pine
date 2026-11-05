@@ -46,8 +46,11 @@ trendTf   = input.timeframe("15", "Marco de la EMA de tendencia", group = G_TR)
 trendLen  = input.int(200, "EMA de tendencia: periodo", minval = 2, group = G_TR)
 emaLen    = input.int(21, "EMA rápida", minval = 2, group = G_TR)
 useSlope  = input.bool(false, "Exigir pendiente de la EMA rápida", group = G_TR)
+useTrend  = input.bool(true, "Usar filtro de tendencia (apagado = más entradas, más riesgo)", group = G_TR)
 
-entryMode = input.string("Retroceso RSI", "Tipo de entrada", options = ["Retroceso RSI", "Toque EMA rápida"], group = G_SIG)
+entryMode = input.string("Todas (más entradas)", "Tipo de entrada", options = ["Todas (más entradas)", "Retroceso RSI", "Toque EMA rápida", "Cruce EMAs"], group = G_SIG,
+     tooltip = "Todas = entra con cualquiera de las tres señales.")
+emaMicroLen = input.int(9, "Cruce EMAs: EMA micro (cruza la EMA rápida)", minval = 2, group = G_SIG)
 rsiLen    = input.int(7, "RSI: periodo", minval = 2, group = G_SIG)
 rsiLow    = input.float(40, "RSI: nivel de retroceso en largos", minval = 1, maxval = 50, group = G_SIG,
      tooltip = "Con 30 casi nunca coincide con una tendencia alcista: el bot apenas opera. 40 da muchas más entradas.")
@@ -66,8 +69,10 @@ maxDayLoss  = input.float(3.0, "Pérdida máxima diaria (%)", minval = 0.1, maxv
 maxTrades   = input.int(30, "Máximo de operaciones al día", minval = 1, group = G_RISK)
 qtyDecimals = input.int(3, "Decimales de la cantidad (BTC)", minval = 0, maxval = 8, group = G_RISK)
 
-minAtrPct = input.float(0.08, "ATR mínimo (% del precio)", minval = 0, step = 0.01, group = G_FLT,
-     tooltip = "Si el ATR es menor, el objetivo no cubre bien comisiones y deslizamiento. Con comisión neta de 0.018 % por lado, la ida y vuelta cuesta ~0.036 %.")
+minTpPct  = input.float(0.10, "Take profit mínimo (% del precio)", minval = 0, step = 0.01, group = G_FLT,
+     tooltip = "En lugar de bloquear cuando el mercado está tranquilo, amplía el TP (y el SL en la misma proporción) hasta este mínimo, para que cubra las comisiones. Con 0.018 % por lado, la ida y vuelta cuesta ~0.036 %.")
+minAtrPct = input.float(0.0, "ATR mínimo para operar (% del precio, 0 = no filtrar)", minval = 0, step = 0.01, group = G_FLT)
+showStats = input.bool(true, "Mostrar tabla de diagnóstico", group = G_FLT)
 sessionStr = input.session("0000-2400", "Sesión (UTC)", group = G_FLT)
 startDate  = input.time(timestamp("2024-01-01T00:00:00"), "Desde", group = G_FLT)
 endDate    = input.time(timestamp("2099-12-31T00:00:00"), "Hasta", group = G_FLT)
@@ -83,20 +88,32 @@ f_msg(float slDist, float tpDist) =>
 // ─────────────────────────── Indicadores ───────────────────────────
 trendEma = request.security(syminfo.tickerid, trendTf, ta.ema(close, trendLen)[1], lookahead = barmerge.lookahead_on)
 emaFast  = ta.ema(close, emaLen)
+emaMicro = ta.ema(close, emaMicroLen)
 rsi      = ta.rsi(close, rsiLen)
 atr      = ta.atr(atrLen)
 atrPct   = atr / close * 100
 
-upTrend = not na(trendEma) and close > trendEma and (not useSlope or emaFast > emaFast[1])
-dnTrend = not na(trendEma) and close < trendEma and (not useSlope or emaFast < emaFast[1])
+upTrend = (not useTrend or (not na(trendEma) and close > trendEma)) and (not useSlope or emaFast > emaFast[1])
+dnTrend = (not useTrend or (not na(trendEma) and close < trendEma)) and (not useSlope or emaFast < emaFast[1])
+
+rsiLong   = ta.crossover(rsi, rsiLow)
+rsiShort  = ta.crossunder(rsi, rsiHigh)
+touchLong  = low <= emaFast and close > emaFast and close > open
+touchShort = high >= emaFast and close < emaFast and close < open
+crossLong  = ta.crossover(emaMicro, emaFast)
+crossShort = ta.crossunder(emaMicro, emaFast)
 
 bool longSig = switch entryMode
-    "Retroceso RSI" => ta.crossover(rsi, rsiLow)
-    => low <= emaFast and close > emaFast and close > open
+    "Retroceso RSI"    => rsiLong
+    "Toque EMA rápida" => touchLong
+    "Cruce EMAs"       => crossLong
+    => rsiLong or touchLong or crossLong
 
 bool shortSig = switch entryMode
-    "Retroceso RSI" => ta.crossunder(rsi, rsiHigh)
-    => high >= emaFast and close < emaFast and close < open
+    "Retroceso RSI"    => rsiShort
+    "Toque EMA rápida" => touchShort
+    "Cruce EMAs"       => crossShort
+    => rsiShort or touchShort or crossShort
 
 inDate = time >= startDate and time <= endDate
 inSess = not na(time(timeframe.period, sessionStr, "UTC"))
@@ -113,9 +130,9 @@ dayLossHit = strategy.equity <= dayStartEq * (1 - maxDayLoss / 100)
 canEnter = inDate and inSess and volOk and not dayLossHit and tradesToday < maxTrades and strategy.position_size == 0 and barstate.isconfirmed
 
 // ───────────────────────── Tamaño de posición ─────────────────────────
-f_qty(float stopDist) =>
+f_qty(float dist) =>
     float maxQty  = strategy.equity * maxLev / close
-    float riskQty = stopDist > 0 ? strategy.equity * riskPct / 100 / stopDist : maxQty
+    float riskQty = dist > 0 ? strategy.equity * riskPct / 100 / dist : maxQty
     float factor  = math.pow(10, qtyDecimals)
     math.floor(math.min(riskQty, maxQty) * factor) / factor
 
@@ -127,13 +144,18 @@ var float slDist = na
 var float tpDist = na
 var int entryBar = na
 
-stopDist = atr * slMult
+// TP mínimo: si el ATR es pequeño se amplían TP y SL en la misma proporción.
+float tpRaw   = atr * tpMult
+float minTp   = close * minTpPct / 100
+float scaleUp = tpRaw > 0 and tpRaw < minTp ? minTp / tpRaw : 1.0
+stopDist   = atr * slMult * scaleUp
+targetDist = tpRaw * scaleUp
 
 if canEnter and allowLong and upTrend and longSig
     float q = f_qty(stopDist)
     if q > 0
         slDist := stopDist
-        tpDist := atr * tpMult
+        tpDist := targetDist
         entryBar := bar_index
         tradesToday += 1
         strategy.entry("Long", strategy.long, qty = q, alert_message = f_msg(slDist, tpDist))
@@ -141,7 +163,7 @@ else if canEnter and allowShort and dnTrend and shortSig
     float q = f_qty(stopDist)
     if q > 0
         slDist := stopDist
-        tpDist := atr * tpMult
+        tpDist := targetDist
         entryBar := bar_index
         tradesToday += 1
         strategy.entry("Short", strategy.short, qty = q, alert_message = f_msg(slDist, tpDist))
@@ -165,3 +187,49 @@ posDir = math.sign(strategy.position_size)
 plot(posDir != 0 ? strategy.position_avg_price - posDir * slDist : na, "Stop", color = color.new(color.red, 0), style = plot.style_linebr)
 plot(posDir != 0 ? strategy.position_avg_price + posDir * tpDist : na, "Objetivo", color = color.new(color.green, 0), style = plot.style_linebr)
 bgcolor(dayLossHit ? color.new(color.red, 85) : not volOk ? color.new(color.gray, 92) : na, title = "Bloqueos")
+
+// ─────────────────────── Diagnóstico de entradas ───────────────────────
+// Cuenta en cuántas velas hubo señal y qué filtro la bloqueó, para saber qué ajustar.
+var int nSig = 0
+var int nTrendBlk = 0
+var int nVolBlk = 0
+var int nDayBlk = 0
+var int nPosBlk = 0
+var int nEntries = 0
+var int nBars = 0
+if inDate
+    nBars += 1
+    bool anySig = (allowLong and longSig) or (allowShort and shortSig)
+    if anySig
+        nSig += 1
+        bool trendOk = (allowLong and longSig and upTrend) or (allowShort and shortSig and dnTrend)
+        if strategy.position_size != 0
+            nPosBlk += 1
+        else if not trendOk
+            nTrendBlk += 1
+        else if not volOk
+            nVolBlk += 1
+        else if dayLossHit or tradesToday >= maxTrades
+            nDayBlk += 1
+if strategy.position_size == 0 and canEnter and ((allowLong and upTrend and longSig) or (allowShort and dnTrend and shortSig))
+    nEntries += 1
+
+if showStats and barstate.islast
+    var table t = table.new(position.top_right, 2, 8, bgcolor = color.new(color.black, 20), border_width = 1)
+    float days = nBars * timeframe.in_seconds() / 86400.0
+    table.cell(t, 0, 0, "Velas analizadas", text_color = color.white)
+    table.cell(t, 1, 0, str.tostring(nBars), text_color = color.white)
+    table.cell(t, 0, 1, "Velas con señal", text_color = color.white)
+    table.cell(t, 1, 1, str.tostring(nSig), text_color = color.white)
+    table.cell(t, 0, 2, "Bloqueadas: ya en posición", text_color = color.white)
+    table.cell(t, 1, 2, str.tostring(nPosBlk), text_color = color.white)
+    table.cell(t, 0, 3, "Bloqueadas: tendencia", text_color = color.white)
+    table.cell(t, 1, 3, str.tostring(nTrendBlk), text_color = color.white)
+    table.cell(t, 0, 4, "Bloqueadas: ATR mínimo", text_color = color.white)
+    table.cell(t, 1, 4, str.tostring(nVolBlk), text_color = color.white)
+    table.cell(t, 0, 5, "Bloqueadas: límite diario", text_color = color.white)
+    table.cell(t, 1, 5, str.tostring(nDayBlk), text_color = color.white)
+    table.cell(t, 0, 6, "Entradas", text_color = color.yellow)
+    table.cell(t, 1, 6, str.tostring(nEntries), text_color = color.yellow)
+    table.cell(t, 0, 7, "Entradas por día", text_color = color.yellow)
+    table.cell(t, 1, 7, days > 0 ? str.tostring(nEntries / days, "#.##") : "-", text_color = color.yellow)
