@@ -2,7 +2,7 @@ import json
 import unittest
 from decimal import Decimal as D
 
-from bydfi_relay import Broker, PlannedOrder, create_app, parse_target, plan_orders
+from bydfi_relay import Broker, PlannedOrder, create_app, parse_limits, parse_target, plan_orders, ticker_key
 
 SECRET = "x" * 20
 
@@ -53,6 +53,30 @@ class FakeExchange:
         self.pos += btc if side == "buy" else -btc
         self.orders.append((side, amount, params))
         return {"id": str(len(self.orders))}
+
+
+class MultiSymbolTests(unittest.TestCase):
+    def test_ticker_key(self):
+        self.assertEqual(ticker_key("BTCUSDT.P"), "BTCUSDT")
+        self.assertEqual(ticker_key("BYDFI:ETHUSDT.P"), "ETHUSDT")
+        self.assertEqual(ticker_key("SOL/USDT:USDT"), "SOLUSDT")
+
+    def test_parse_limits(self):
+        self.assertEqual(parse_limits("BTC=0.01, eth=0.3"), {"BTC": D("0.01"), "ETH": D("0.3")})
+
+    def test_routes_by_ticker_and_respects_each_limit(self):
+        exs = {k: FakeExchange() for k in ("BTC", "ETH", "SOL")}
+        brokers = {}
+        for k, ex in exs.items():
+            b = Broker(ex, f"{k}/USDT:USDT", False)
+            b.setup(3, "isolated")
+            brokers[ticker_key(b.symbol)] = b
+        app = create_app(brokers, SECRET, True, {"BTC": D("0.01"), "ETH": D("0.3"), "SOL": D("5")}).test_client()
+        post = lambda body: app.post("/webhook", data=json.dumps(body), content_type="text/plain")
+        self.assertEqual(post({"secret": SECRET, "symbol": "ETHUSDT.P", "market_position": "long", "position_size": "9"}).status_code, 200)
+        self.assertEqual(exs["ETH"].pos, D("0.3"))
+        self.assertEqual(exs["BTC"].pos, 0)
+        self.assertEqual(post({"secret": SECRET, "symbol": "DOGEUSDT.P", "market_position": "long", "position_size": "1"}).status_code, 400)
 
 
 class PlanTests(unittest.TestCase):

@@ -208,6 +208,43 @@ Ajustes que más cambian el número de entradas:
 - `Relación beneficio/riesgo mínima`: 1.0 en lugar de 1.2 → menos bloqueos por "nivel muy cerca".
 - `Pivote: velas a la izquierda/derecha`: valores más pequeños (5/3) → más niveles y más rebotes.
 
+## 7. Bot automático VWAP + niveles para BTC, ETH y SOL: `crypto_vwap_levels_bot.pine`
+
+Es la versión automática (con órdenes) del indicador "Niveles del informe", adaptada a cripto.
+
+| Pieza | Igual que el indicador | Cambio para cripto |
+|---|---|---|
+| VWAP diario (amarillo) | Sí | Empieza a las **00:00 UTC** (opción: 18:00 NY como en futuros) |
+| VWAP Nueva York (azul) | Desde las 9:30 NY | — |
+| Quién manda | Arriba / abajo de los dos VWAP, o imán entre ambos | — |
+| Retroceso al VWAP NY | 9:35–15:30 NY, vela de confirmación, espera entre señales | Ahora **abre la orden** |
+| Rebote / rechazo en niveles | Mecha ≥ 40 %, stop detrás de la mecha + 0.3 × ATR, R:R ≥ 1.5 | Abre la orden. Por defecto también fuera del horario NY |
+| Medio tamaño contra el VWAP diario | Sí | Se aplica al tamaño real |
+| TP1 / TP2 | TP1 = primer nivel contrario, TP2 = siguiente | Cierra el 50 % en TP1 y mueve el stop a la entrada |
+| Niveles | Del informe por email | **Automáticos**: máximo/mínimo de ayer y de la semana anterior, rango de Asia, pivotes, bandas ±1 del VWAP y los dos VWAP. Más niveles manuales opcionales por activo |
+
+No incluye las entradas del email ni las reentradas "TARDE" del indicador: eran para los setups del informe de oro y Nasdaq.
+
+Niveles manuales: pega en el campo de cada activo el mismo formato que el indicador, por ejemplo
+`98500|R|Máximo semanal;96200|S|Soporte;97300|I|Imán`. El bot elige el campo según el gráfico (BTC, ETH o SOL).
+
+Cantidad: 3 decimales en BTC, 2 en ETH y 1 en SOL (compruébalo con el mínimo de cada contrato en BYDFi).
+
+### Un relay para los tres
+
+En `.env`:
+```
+SYMBOLS=BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT
+MAX_POSITION=BTC=0.01,ETH=0.3,SOL=5
+LEVERAGE=3
+ALLOW_SHORT=true
+```
+Crea **una alerta por gráfico** (`BYDFI:BTCUSDT.P`, `BYDFI:ETHUSDT.P` y `BYDFI:SOLUSDT.P`), todas con la misma URL de webhook.
+El relay envía cada alerta al activo que indica su `{{ticker}}`. Si llega un activo que no está en `SYMBOLS`, lo rechaza.
+
+El relay deja en BYDFi el stop y el TP2 para toda la posición. El TP1 parcial lo ejecuta la alerta de TradingView.
+Cuando llega, el relay reduce la posición a la mitad y vuelve a poner el stop en el precio de entrada y el TP2 para el resto.
+
 ## Advertencias
 
 - Los resultados pasados no garantizan los futuros. Esto no es asesoría financiera.

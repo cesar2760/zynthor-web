@@ -237,15 +237,52 @@ def env_bool(name: str, default: bool) -> bool:
     return os.getenv(name, str(default)).strip().lower() in ("1", "true", "yes", "si", "sí")
 
 
-def create_app(broker: Broker, secret: str, allow_short: bool, max_btc: Decimal,
+def ticker_key(text: str) -> str:
+    """'BYDFI:BTCUSDT.P', 'BTCUSDT.P' o 'BTC/USDT:USDT' -> 'BTCUSDT'."""
+    t = str(text or "").upper().split(":")[-1] if "/" not in str(text or "") else str(text).upper().split(":")[0]
+    for suffix in (".P", "PERP"):
+        if t.endswith(suffix):
+            t = t[: -len(suffix)]
+    return "".join(ch for ch in t if ch.isalnum())
+
+
+def parse_limits(spec: str) -> dict[str, Decimal]:
+    """'BTC=0.01,ETH=0.3,SOL=5' -> {'BTC': Decimal('0.01'), ...}"""
+    out: dict[str, Decimal] = {}
+    for part in (spec or "").split(","):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            out[k.strip().upper()] = Decimal(v.strip())
+    return out
+
+
+def create_app(brokers, secret: str, allow_short: bool, max_size,
                allowed_ips: set[str] | None = None):
+    """brokers: un Broker o {clave_ticker: Broker}. max_size: Decimal o {moneda_base: Decimal}."""
     from flask import Flask, jsonify, request
 
+    if isinstance(brokers, Broker):
+        brokers = {ticker_key(brokers.symbol): brokers}
+    single = len(brokers) == 1
     app = Flask(__name__)
+
+    def pick(payload: dict):
+        if single:
+            return next(iter(brokers.values()))
+        return brokers.get(ticker_key(payload.get("symbol", "")))
+
+    def limit_for(broker: Broker) -> Decimal:
+        if isinstance(max_size, dict):
+            base = broker.symbol.split("/")[0].upper()
+            if base not in max_size:
+                raise ValueError(f"sin tope MAX_POSITION para {base}")
+            return max_size[base]
+        return max_size
 
     @app.get("/health")
     def health():
-        return jsonify(ok=True, symbol=broker.symbol, dry_run=broker.dry_run)
+        return jsonify(ok=True, symbols=[b.symbol for b in brokers.values()],
+                       dry_run=all(b.dry_run for b in brokers.values()))
 
     @app.post("/webhook")
     def webhook():
@@ -260,8 +297,12 @@ def create_app(broker: Broker, secret: str, allow_short: bool, max_btc: Decimal,
         if not check_secret(payload, secret):
             log.warning("secreto incorrecto desde %s", ip)
             return jsonify(error="unauthorized"), 401
+        broker = pick(payload)
+        if broker is None:
+            log.warning("símbolo no configurado: %s", payload.get("symbol"))
+            return jsonify(error=f"símbolo no configurado: {payload.get('symbol')}"), 400
         try:
-            target = parse_target(payload, allow_short, max_btc)
+            target = parse_target(payload, allow_short, limit_for(broker))
         except ValueError as exc:
             return jsonify(error=str(exc)), 400
         try:
@@ -287,12 +328,18 @@ def main() -> None:
         "secret": os.getenv("BYDFI_API_SECRET", ""),
         "enableRateLimit": True,
     })
-    broker = Broker(exchange, os.getenv("SYMBOL", "BTC/USDT:USDT"), dry_run)
-    broker.setup(int(os.getenv("LEVERAGE", "1")), os.getenv("MARGIN_MODE", "isolated"))
+    symbols = [x.strip() for x in os.getenv("SYMBOLS", "").split(",") if x.strip()] \
+        or [os.getenv("SYMBOL", "BTC/USDT:USDT")]
+    brokers = {}
+    for sym in symbols:
+        b = Broker(exchange, sym, dry_run)
+        b.setup(int(os.getenv("LEVERAGE", "1")), os.getenv("MARGIN_MODE", "isolated"))
+        brokers[ticker_key(sym)] = b
+    limits = parse_limits(os.getenv("MAX_POSITION", ""))
+    max_size = limits if limits else Decimal(os.getenv("MAX_POSITION_BTC", "0.01"))
     ips = {x.strip() for x in os.getenv("ALLOWED_IPS", "").split(",") if x.strip()} or None
-    app = create_app(broker, secret, env_bool("ALLOW_SHORT", False),
-                     Decimal(os.getenv("MAX_POSITION_BTC", "0.01")), ips)
-    log.info("relay listo: %s dry_run=%s", broker.symbol, dry_run)
+    app = create_app(brokers, secret, env_bool("ALLOW_SHORT", False), max_size, ips)
+    log.info("relay listo: %s dry_run=%s", ", ".join(symbols), dry_run)
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8080")))
 
 
