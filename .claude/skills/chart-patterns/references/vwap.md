@@ -178,3 +178,36 @@ Nota MGC: los parámetros por defecto están pensados para MNQ (riesgo máx.
 60 pts = 120 USD/contrato en MNQ, pero 60 pts en oro = 600 USD/contrato) y
 los textos de alerta dicen "MNQ". Revisar riesgo máximo en puntos y USD al
 usarlo en MGC.
+
+### Formato del panel del usuario (entradas + niveles)
+
+El usuario tiene un panel con dos cajas donde pega lo que le doy. **Al
+analizar MNQ / MGC, entregar siempre estos dos bloques, cada uno en su
+propio bloque de código para copiar:**
+
+**1. Entradas** (caja "Entradas (bloque TradingView del email)"), una por
+señal, separadas por ` ; `:
+
+```
+MNQZ2026 | VENTA 1 | entrada 28478 | stop 28525 | TP1 28405 | TP2 28290 ; MNQZ2026 | COMPRA 2 | entrada 28685 | stop 28640 | TP1 28772 | TP2 28880
+```
+
+- `SÍMBOLO | COMPRA|VENTA n | entrada X | stop X | TP1 X | TP2 X`; `n` =
+  número de la entrada del día (1, 2…), no contratos.
+- TP1 y TP2 se colocan en los **siguientes niveles** de la lista (no en R
+  fijos); comprobar que TP1 ≥ 1R. Stop detrás de la estructura/mecha.
+- Precios sin separador de miles; oro con 1 decimal si hace falta.
+
+**2. Niveles**, una caja por instrumento ("Oro · MGCZ2026 / GC" y
+"Nasdaq · MNQZ2026 / NQ"), `precio|tipo|texto` separados por `;` **sin
+espacios alrededor**, ordenados de mayor a menor precio:
+
+```
+28969|R|Maximo del dia;28911|R|Muro calls QQQ 700;28772|R|iFVG;28680|I|Maximo sesion + iman NDX;28615|I|VWAP diario nuevo;28576|I|Gamma flip QW / max pain;28485|S|QQQ 690 acelerador;28405|S|Minimo NY
+```
+
+- Tipos: R resistencia, S soporte, I imán.
+- El usuario mezcla niveles técnicos (máx./mín. del día y de NY, VWAP,
+  bandas, FVG/iFVG, medias) con niveles de opciones (muros de calls/puts de
+  QQQ / GLD convertidos a NQ / GC, gamma flip, max pain, vanna, DEX). Los
+  de opciones los aporta él: conservarlos y añadir los técnicos.
