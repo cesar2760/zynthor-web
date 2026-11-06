@@ -128,3 +128,8 @@ Reglas de la estrategia (resumen):
   09:55–10:10, 13:55–14:15), cierre total 15:50.
 - **Riesgo (prueba de fondeo)**: 2 contratos, pérdida máxima diaria 500 USD,
   máximo 4 operaciones al día.
+
+Temporalidad: el usuario la probó en el Probador de estrategias de
+TradingView y le resulta **rentable en 5 minutos** (MNQ). Cifras del
+backtest aún no compartidas. Al analizar sus gráficos, priorizar 5 min
+para entradas y 15 min / diario para contexto.
