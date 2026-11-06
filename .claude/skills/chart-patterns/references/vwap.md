@@ -101,7 +101,21 @@ gestión del riesgo siempre.
 
 ## Configuración del usuario (TradingView)
 
-- En el gráfico del usuario (estrategia "Estrateg... 2 2 1 0 0,3 60 260 150
-  500 4 Parcial", Micro Nasdaq MNQ), la **línea azul es el VWAP** (confirmado
-  por el usuario). El resto de líneas (roja, naranja, amarilla, verdes) aún
-  no están identificadas: preguntar si hace falta.
+Gráfico del usuario: Micro Nasdaq (MNQ), estrategia "Estrateg... 2 2 1 0 0,3
+60 260 150 500 4 Parcial", panel inferior "Panel RSI de confirmación 14 14
+75 25". Líneas (confirmadas por el usuario):
+
+- **Dos VWAP**, línea **azul** y línea **amarilla**: uno anclado a la
+  **apertura de Nueva York** (09:30 ET) y otro **diario** (se reinicia con
+  la sesión de futuros a las 18:00 ET). Por el gráfico de 15 min del
+  6-nov-2026, la amarilla salta al reiniciarse a las 18:00 → **amarilla =
+  VWAP diario**, **azul = VWAP de la apertura de NY** (inferido; confirmar
+  con el usuario si hay duda).
+- **Líneas roja y verde** (con zona sombreada): basadas en **RSI** según el
+  usuario; roja = sesgo bajista, verde = sesgo alcista. Los puntos rojos y
+  verdes son las señales de venta/compra de la estrategia.
+- **Línea naranja**: sin identificar todavía.
+
+Lectura con dos VWAP: precio sobre ambos = sesgo alcista claro; bajo ambos
+= bajista claro; entre los dos = transición/rango, y el VWAP que queda por
+delante es el primer objetivo o resistencia/soporte.
