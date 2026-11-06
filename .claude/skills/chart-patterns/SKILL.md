@@ -120,7 +120,8 @@ Responder con este formato:
 Leer también `references/smc-terms.md` (glosario Smart Money / ICT: FVG,
 OB, BOS, CHoCH, liquidez, killzones, PO3/AMD y modelo de entrada) y
 `references/supply-demand-confirmations.md` (velas de confirmación en zonas
-de oferta y demanda), y añadir esa lectura cuando aplique: liquidez cercana
+de oferta y demanda) y `references/vwap.md` (lectura del VWAP, pullback,
+breakdown, cruces y errores comunes), y añadir esa lectura cuando aplique: liquidez cercana
 (PDH/PDL, EQH/EQL), barridos, FVG y order blocks donde entrar, y si el
 momento cae en una killzone.
 
