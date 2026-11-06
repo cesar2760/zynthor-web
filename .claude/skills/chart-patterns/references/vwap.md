@@ -147,3 +147,34 @@ parciales + trailing 1,75 × ATR, días de tendencia (EMA 20) activado.
   salvo una plana. Sin los 5 mejores días: +1.942 USD (sigue positiva).
 - Límites de la muestra: solo ~7 semanas y 60 posiciones; sin Bar Magnifier
   (resultados de parciales/trailing pueden ser optimistas). Validar en demo.
+
+## Niveles para pegar en el indicador (flujo de trabajo del usuario)
+
+El usuario usa la estrategia "VWAP diario + VWAP NY v2" en **MNQZ2026**
+(Micro Nasdaq, 2 USD/punto, tick 0,25) y **MGCZ2026** (Micro Oro, 10
+USD/punto, tick 0,10). Cuando le doy un análisis o señales, él copia los
+niveles en el campo **"Niveles del informe"** del indicador (filtro de
+niveles, `useLv`), que bloquea entradas con un nivel contrario antes del TP1.
+
+**Siempre que analice MNQ o MGC, terminar con una línea lista para pegar**,
+una por instrumento, con este formato exacto:
+
+```
+precio|tipo|texto ; precio|tipo|texto ; ...
+```
+
+- `tipo`: **R** = resistencia, **S** = soporte, **I** = imán (objetivo que
+  atrae al precio; bloquea en ambos sentidos).
+- `precio`: número con punto decimal, sin separador de miles
+  (p. ej. `27518.75`, no `27.518,75`).
+- `texto`: etiqueta corta sin `|` ni `;` (p. ej. `Fibo 0.5`, `PDH`, `FVG 15m`).
+
+Ejemplo MNQ: `27518.75|R|Fibo 0.5 diario ; 27150|R|Neckline 15m ; 26600|S|Doble suelo ; 26817|I|VWAP diario`
+
+Recordar al usuario que active "Filtro de niveles" para que se usen, y que
+los niveles son del día: actualizarlos cada sesión.
+
+Nota MGC: los parámetros por defecto están pensados para MNQ (riesgo máx.
+60 pts = 120 USD/contrato en MNQ, pero 60 pts en oro = 600 USD/contrato) y
+los textos de alerta dicen "MNQ". Revisar riesgo máximo en puntos y USD al
+usarlo en MGC.
