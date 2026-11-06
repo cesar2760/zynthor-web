@@ -29,6 +29,6 @@ cada tipo cambia cómo se mueve el precio. Leerlos así:
 4. Mantener el riesgo dentro de los límites de la estrategia
    (`vwap.md`).
 
-Pendiente de confirmar con el usuario: qué significa "QW" (¿fuente de los
-datos o vencimiento semanal?) y el criterio exacto de "acelerador" y
+"QW" = QuantWheel, la fuente de datos de opciones del usuario. Pendiente de confirmar
+el criterio exacto de "acelerador" y
 "vanna peligro" en sus informes.
