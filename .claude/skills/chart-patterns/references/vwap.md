@@ -101,22 +101,30 @@ gestión del riesgo siempre.
 
 ## Configuración del usuario (TradingView)
 
-Gráfico del usuario: Micro Nasdaq (MNQ), estrategia **"Estrategia VWAP
-diario + VWAP NY"** (parámetros "2 2 1 0 0,3 60 260 150 500 4 Parcial") y
-panel inferior "Panel RSI de confirmación 14 14 75 25". Leyenda confirmada
-en la pestaña Estilo de la estrategia:
+Gráfico del usuario: Micro Nasdaq (MNQ), 15 min, estrategia **"Estrategia
+VWAP diario + VWAP NY v2"**. El código completo está en
+`tradingview/vwap_daily_ny_v2.pine` (leerlo para detalles). Panel inferior:
+"Panel RSI de confirmación 14 14 75 25".
 
 | Elemento | Color | Qué es |
 |---|---|---|
-| VWAP diario | Amarillo | VWAP que se reinicia con la sesión de futuros (18:00 ET) |
-| VWAP NY | Azul | VWAP anclado a la apertura de Nueva York (09:30 ET) |
-| Línea de tendencia | Verde (color 0) / roja (color 1) | Línea escalonada de tendencia (el usuario la relaciona con el RSI): verde = tendencia alcista, roja = bajista |
-| Cambio a alcista / bajista | Círculo verde / rojo | Señal de giro de la línea de tendencia (compra / venta) |
-| Media de tendencia | Naranja | Media móvil de tendencia |
-| Banda +1 / Banda −1 | Rojo oscuro / verde oscuro | Bandas por encima/debajo (desviación); zonas de sobreextensión |
+| VWAP diario | Amarillo | `ta.vwap` reiniciado con el día de futuros (18:00 ET), con bandas ±1 desviación |
+| VWAP NY | Azul | VWAP acumulado desde la vela de las 09:30 ET |
+| Línea de tendencia | Verde / roja (relleno) | **Supertrend (3 × ATR 10)**: verde = alcista, roja = bajista |
+| Cambio a alcista / bajista | Círculo verde / rojo | Giro del Supertrend |
+| Banda +1 / Banda −1 | Rojo / verde tenue | Bandas ±1 desviación del VWAP diario |
+| Media de tendencia | Naranja | EMA 20 (solo si "días de tendencia" está activo) |
 | Stop / Take profit | Rojo / verde | Niveles de la operación abierta |
 
-Lectura con dos VWAP (misma lógica que `tradingview/crypto_vwap_levels_bot.pine`):
-precio sobre ambos = mandan los compradores (solo compras en retroceso al
-VWAP NY); bajo ambos = mandan los vendedores (solo ventas); entre los dos =
-transición, el otro VWAP actúa de imán/objetivo.
+Reglas de la estrategia (resumen):
+- **Quién manda**: precio sobre ambos VWAP = solo compras; bajo ambos = solo
+  ventas; entre ambos = operar hacia el VWAP diario (imán).
+- **Entrada**: vela que toca el VWAP NY (o el VWAP diario / banda ±1 con
+  tendencia) y cierra a favor, con mecha de rechazo ≥ 30 % de la vela.
+- **Stop**: detrás de la mecha + 0,3 × ATR; no entra si el riesgo > 60 pts.
+- **Salida**: 1/3 en 1R, 1/3 en 2R, último tercio con trailing 1,5 × ATR;
+  stop a la entrada al llegar a 1R.
+- **Horario**: entradas 09:35–11:45 ET, pausas por datos (08:25–08:40,
+  09:55–10:10, 13:55–14:15), cierre total 15:50.
+- **Riesgo (prueba de fondeo)**: 2 contratos, pérdida máxima diaria 500 USD,
+  máximo 4 operaciones al día.
