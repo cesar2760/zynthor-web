@@ -101,21 +101,22 @@ gestión del riesgo siempre.
 
 ## Configuración del usuario (TradingView)
 
-Gráfico del usuario: Micro Nasdaq (MNQ), estrategia "Estrateg... 2 2 1 0 0,3
-60 260 150 500 4 Parcial", panel inferior "Panel RSI de confirmación 14 14
-75 25". Líneas (confirmadas por el usuario):
+Gráfico del usuario: Micro Nasdaq (MNQ), estrategia **"Estrategia VWAP
+diario + VWAP NY"** (parámetros "2 2 1 0 0,3 60 260 150 500 4 Parcial") y
+panel inferior "Panel RSI de confirmación 14 14 75 25". Leyenda confirmada
+en la pestaña Estilo de la estrategia:
 
-- **Dos VWAP**, línea **azul** y línea **amarilla**: uno anclado a la
-  **apertura de Nueva York** (09:30 ET) y otro **diario** (se reinicia con
-  la sesión de futuros a las 18:00 ET). Por el gráfico de 15 min del
-  6-nov-2026, la amarilla salta al reiniciarse a las 18:00 → **amarilla =
-  VWAP diario**, **azul = VWAP de la apertura de NY** (inferido; confirmar
-  con el usuario si hay duda).
-- **Líneas roja y verde** (con zona sombreada): basadas en **RSI** según el
-  usuario; roja = sesgo bajista, verde = sesgo alcista. Los puntos rojos y
-  verdes son las señales de venta/compra de la estrategia.
-- **Línea naranja**: sin identificar todavía.
+| Elemento | Color | Qué es |
+|---|---|---|
+| VWAP diario | Amarillo | VWAP que se reinicia con la sesión de futuros (18:00 ET) |
+| VWAP NY | Azul | VWAP anclado a la apertura de Nueva York (09:30 ET) |
+| Línea de tendencia | Verde (color 0) / roja (color 1) | Línea escalonada de tendencia (el usuario la relaciona con el RSI): verde = tendencia alcista, roja = bajista |
+| Cambio a alcista / bajista | Círculo verde / rojo | Señal de giro de la línea de tendencia (compra / venta) |
+| Media de tendencia | Naranja | Media móvil de tendencia |
+| Banda +1 / Banda −1 | Rojo oscuro / verde oscuro | Bandas por encima/debajo (desviación); zonas de sobreextensión |
+| Stop / Take profit | Rojo / verde | Niveles de la operación abierta |
 
-Lectura con dos VWAP: precio sobre ambos = sesgo alcista claro; bajo ambos
-= bajista claro; entre los dos = transición/rango, y el VWAP que queda por
-delante es el primer objetivo o resistencia/soporte.
+Lectura con dos VWAP (misma lógica que `tradingview/crypto_vwap_levels_bot.pine`):
+precio sobre ambos = mandan los compradores (solo compras en retroceso al
+VWAP NY); bajo ambos = mandan los vendedores (solo ventas); entre los dos =
+transición, el otro VWAP actúa de imán/objetivo.
