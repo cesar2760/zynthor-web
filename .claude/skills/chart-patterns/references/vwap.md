@@ -133,3 +133,17 @@ Temporalidad: el usuario la probó en el Probador de estrategias de
 TradingView y le resulta **rentable en 5 minutos** (MNQ). Cifras del
 backtest aún no compartidas. Al analizar sus gráficos, priorizar 5 min
 para entradas y 15 min / diario para contexto.
+
+### Backtest del usuario (TradingView, exportado 5-nov-2026)
+
+MNQZ2026, 5 min, 15-sep → 5-nov-2026 (32 días operados). Ajuste de
+contratos al riesgo activado (252 USD/operación, stop máx. 150 pts),
+parciales + trailing 1,75 × ATR, días de tendencia (EMA 20) activado.
+- 101 "operaciones" de TradingView = **60 posiciones** (cada parcial cuenta
+  como una): 43 ganadoras / 17 perdedoras.
+- Beneficio neto +5.494 USD (+11 % de 50k), profit factor 2,75, caída
+  máxima 536 USD intrabarra (1,07 %), comprar y mantener −11 %.
+- 22 días positivos / 10 negativos; peor día −255 USD. Semanas: todas ≥ 0
+  salvo una plana. Sin los 5 mejores días: +1.942 USD (sigue positiva).
+- Límites de la muestra: solo ~7 semanas y 60 posiciones; sin Bar Magnifier
+  (resultados de parciales/trailing pueden ser optimistas). Validar en demo.
