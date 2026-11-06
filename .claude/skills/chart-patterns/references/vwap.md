@@ -98,3 +98,10 @@ gestión del riesgo siempre.
   OB o PDH/PDL es de más calidad.
 - El VWAP es menos fiable al principio de la sesión (poco volumen
   acumulado) y gana peso a medida que avanza el día.
+
+## Configuración del usuario (TradingView)
+
+- En el gráfico del usuario (estrategia "Estrateg... 2 2 1 0 0,3 60 260 150
+  500 4 Parcial", Micro Nasdaq MNQ), la **línea azul es el VWAP** (confirmado
+  por el usuario). El resto de líneas (roja, naranja, amarilla, verdes) aún
+  no están identificadas: preguntar si hace falta.
