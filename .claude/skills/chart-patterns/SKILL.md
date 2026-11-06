@@ -117,6 +117,13 @@ Responder con este formato:
 4. **Plan**: entrada, stop, objetivo y relación beneficio/riesgo.
 5. **Qué invalidaría** el escenario.
 
+Leer también `references/smc-terms.md` (glosario Smart Money / ICT: FVG,
+OB, BOS, CHoCH, liquidez, killzones, PO3/AMD y modelo de entrada) y
+`references/supply-demand-confirmations.md` (velas de confirmación en zonas
+de oferta y demanda), y añadir esa lectura cuando aplique: liquidez cercana
+(PDH/PDL, EQH/EQL), barridos, FVG y order blocks donde entrar, y si el
+momento cae en una killzone.
+
 Si hay datos de velas disponibles (p. ej. la estrategia VWAP + niveles de
 este repo o una herramienta de backtest), combinar el patrón con esos
 niveles en vez de analizarlo aislado.
