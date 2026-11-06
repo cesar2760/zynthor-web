@@ -1,0 +1,90 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0
+// https://mozilla.org/MPL/2.0/
+//
+// EMA 9/21 + RSI + MACD Scalper (Zynthor)
+// ------------------------------------------------------------------------------
+// Copia corregida de la estrategia "90% Win Rate Scalping Strategy" de una
+// infografía de internet:
+//   Compra: EMA 9 cruza sobre EMA 21, RSI(14) > 50 y MACD sobre su señal.
+//   Venta:  EMA 9 cruza bajo EMA 21, RSI(14) < 50 y MACD bajo su señal.
+//   TP 2 %, SL 1 %.
+//
+// Correcciones respecto al original:
+//   - TP y SL calculados sobre el precio de ENTRADA (el original usaba el
+//     cierre de cada vela, así que los niveles se movían).
+//   - Comisión y slippage incluidos (el original no tenía ninguno).
+//   - Filtros opcionales (apagados por defecto, para que por defecto sea la
+//     estrategia original): EMA 200 de tendencia y ADX mínimo.
+//
+// BACKTEST (TextToQuant, BTCUSDT 1h, nov-2024 a nov-2026, comisión 0,1 %):
+//   470 operaciones, 33,6 % de aciertos (NO 90 %), profit factor 0,74,
+//   -9,5 % frente a +7,2 % de comprar y mantener. Gana en tendencia y pierde
+//   en rango/lateral. NO es rentable tal cual: pruébala con los filtros
+//   activados y en demo antes de usar dinero real.
+// ------------------------------------------------------------------------------
+//@version=6
+strategy("EMA RSI MACD Scalper (Zynthor)", shorttitle = "EMA RSI MACD", overlay = true,
+     initial_capital    = 1000,
+     default_qty_type   = strategy.percent_of_equity,
+     default_qty_value  = 10,
+     commission_type    = strategy.commission.percent,
+     commission_value   = 0.05,
+     slippage           = 1,
+     pyramiding         = 0)
+
+// ===== Parámetros =====
+fastLen   = input.int(9,  "EMA rápida")
+slowLen   = input.int(21, "EMA lenta")
+rsiLen    = input.int(14, "RSI periodo")
+tpPct     = input.float(2.0, "Take profit %", step = 0.1)
+slPct     = input.float(1.0, "Stop loss %",   step = 0.1)
+allowShort = input.bool(true, "Permitir cortos")
+
+useTrend  = input.bool(false, "Filtro: solo a favor de la EMA 200", group = "Filtros")
+trendLen  = input.int(200, "EMA de tendencia", group = "Filtros")
+useAdx    = input.bool(false, "Filtro: ADX mínimo (evita rangos)", group = "Filtros")
+adxLen    = input.int(14, "ADX periodo", group = "Filtros")
+adxMin    = input.float(20, "ADX mínimo", group = "Filtros")
+
+// ===== Indicadores =====
+emaFast = ta.ema(close, fastLen)
+emaSlow = ta.ema(close, slowLen)
+emaTrend = ta.ema(close, trendLen)
+rsi = ta.rsi(close, rsiLen)
+[macdLine, signalLine, _] = ta.macd(close, 12, 26, 9)
+[_, _, adx] = ta.dmi(adxLen, adxLen)
+
+trendLongOk  = not useTrend or close > emaTrend
+trendShortOk = not useTrend or close < emaTrend
+adxOk        = not useAdx or adx >= adxMin
+
+// ===== Señales =====
+buyCondition  = ta.crossover(emaFast, emaSlow)  and rsi > 50 and macdLine > signalLine and trendLongOk  and adxOk
+sellCondition = ta.crossunder(emaFast, emaSlow) and rsi < 50 and macdLine < signalLine and trendShortOk and adxOk
+
+if buyCondition
+    strategy.entry("BUY", strategy.long)
+if sellCondition
+    if allowShort
+        strategy.entry("SELL", strategy.short)
+    else
+        strategy.close("BUY")
+
+// ===== TP / SL sobre el precio de entrada =====
+entry = strategy.position_avg_price
+if strategy.position_size > 0
+    strategy.exit("TP/SL BUY", from_entry = "BUY",
+         limit = entry * (1 + tpPct / 100), stop = entry * (1 - slPct / 100))
+if strategy.position_size < 0
+    strategy.exit("TP/SL SELL", from_entry = "SELL",
+         limit = entry * (1 - tpPct / 100), stop = entry * (1 + slPct / 100))
+
+// ===== Gráfico =====
+plot(emaFast, "EMA rápida", color.green)
+plot(emaSlow, "EMA lenta",  color.red)
+plot(useTrend ? emaTrend : na, "EMA tendencia", color.orange)
+plotshape(buyCondition,  "Compra", shape.triangleup,   location.belowbar, color.green, size = size.small)
+plotshape(sellCondition, "Venta",  shape.triangledown, location.abovebar, color.red,   size = size.small)
+
+alertcondition(buyCondition,  "Compra", "EMA RSI MACD: señal de COMPRA")
+alertcondition(sellCondition, "Venta",  "EMA RSI MACD: señal de VENTA")
